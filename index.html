@@ -1416,6 +1416,34 @@ function loseLife() {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Gem Downgrade Logic
+// ---------------------------------------------------------------------------
+
+function downgradeGem(key) {
+  if (gameOver || roundActive || !!pendingGemChoice) return;
+
+  const gem = gems.get(key);
+  if (!gem) return;
+
+  if (gem.isCombo) {
+    setMessage("Combination gems cannot be downgraded.");
+    return;
+  }
+
+  if (gem.level <= 0) {
+    setMessage("Chipped gems cannot be downgraded further.");
+    return;
+  }
+
+  // Reduce quality tier by 1
+  gem.level -= 1;
+  setMessage(`Downgraded ${gem.type} to ${GEM_LEVELS[gem.level]}.`);
+
+  // Refresh selection stats
+  updateStats();
+}
+  
 function removeStone() {
   if (gameOver) {
     return setMessage(
@@ -2522,6 +2550,93 @@ function drawCombatEffects(now) {
 }
 
 // ---------------------------------------------------------------------------
+// Board Combination & Gem Stat Helpers
+// ---------------------------------------------------------------------------
+
+function getGemStats(gem) {
+  if (gem.isCombo) {
+    const def = COMBO_GEMS[gem.type];
+    return {
+      name: gem.type,
+      color: def.colour,
+      role: def.role,
+      stats: def.stats
+    };
+  }
+  const quality = GEM_LEVELS[gem.level];
+  const def = GEM_TYPES[gem.type];
+  return {
+    name: `${quality} ${gem.type}`,
+    color: def.colour,
+    role: def.role,
+    stats: def.levels[gem.level]
+  };
+}
+
+function findIngredientsForCombo(combo, targetGemKey) {
+  const counts = new Map();
+  const gemList = [];
+
+  for (const [k, g] of gems) {
+    if (g.isCombo) continue;
+    const label = `${GEM_LEVELS[g.level]} ${g.type}`;
+    if (!counts.has(label)) counts.set(label, []);
+    counts.get(label).push(k);
+  }
+
+  const targetGem = gems.get(targetGemKey);
+  if (!targetGem || targetGem.isCombo) return null;
+
+  const targetLabel = `${GEM_LEVELS[targetGem.level]} ${targetGem.type}`;
+  const matchedKeys = [];
+
+  for (const req of combo.requires) {
+    const label = `${req.q} ${req.t}`;
+    const available = counts.get(label) || [];
+    if (available.length === 0) return null;
+    
+    // Take a key from available
+    const keyToUse = available.pop();
+    matchedKeys.push(keyToUse);
+  }
+
+  // Ensure target gem is actually involved in this combination match
+  if (!matchedKeys.includes(targetGemKey)) return null;
+
+  return matchedKeys;
+}
+
+function combineBoardGem(comboName, targetGemKey) {
+  const combo = COMBINATIONS.find(c => c.name === comboName);
+  if (!combo) return;
+
+  const ingKeys = findIngredientsForCombo(combo, targetGemKey);
+  if (!ingKeys) {
+    setMessage("Combination ingredients are no longer available.");
+    return;
+  }
+
+  // Remove used gems, keep the target gem location for the combo tower
+  ingKeys.forEach(k => {
+    if (k !== targetGemKey) {
+      gems.delete(k);
+    }
+  });
+
+  gems.set(targetGemKey, {
+    key: targetGemKey,
+    type: combo.name,
+    level: 0,
+    isCombo: true,
+    lastFired: 0
+  });
+
+  selectedGem = gems.get(targetGemKey);
+  setMessage(`Successfully created ${combo.name}!`);
+  updateStats();
+}
+
+// ---------------------------------------------------------------------------
 // Combination availability / sparkle
 // ---------------------------------------------------------------------------
 
@@ -3105,28 +3220,22 @@ function closeRecipes() {
 // UI
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// UI
+// ---------------------------------------------------------------------------
+
 function updateStats() {
-  $('turn').textContent=turn;
-  $('stones').textContent=stonesLeft;
-  $('seed').textContent=seed;
+  $('turn').textContent = turn;
+  $('stones').textContent = stonesLeft;
+  $('seed').textContent = seed;
 
-  $('gemStatus').textContent=
-    gemAvailable
-      ? 'Available'
-      : 'Used';
+  $('gemStatus').textContent = gemAvailable ? 'Available' : 'Used';
+  $('round').textContent = round;
 
-  $('round').textContent=round;
+  $('creepsLeft').textContent = `${activeCreeps.length + Math.max(0, creepsToSpawn - spawnedThisRound)}`;
+  $('lives').textContent = livesLeft;
 
-  $('creepsLeft').textContent=
-    `${activeCreeps.length+
-      Math.max(
-        0,
-        creepsToSpawn-spawnedThisRound
-      )}`;
-
-  $('lives').textContent=livesLeft;
-
-  $('randomGem').disabled=
+  $('randomGem').disabled =
     gameOver ||
     roundActive ||
     !!pendingGemChoice ||
@@ -3134,7 +3243,7 @@ function updateStats() {
     !selectedStone ||
     !blocked.has(selectedStone);
 
-  $('removeStone').disabled=
+  $('removeStone').disabled =
     gameOver ||
     roundActive ||
     !!pendingGemChoice ||
@@ -3142,43 +3251,44 @@ function updateStats() {
     !blocked.has(selectedStone) ||
     gems.has(selectedStone);
 
-  $('newMap').disabled=
-    roundActive;
+  $('newMap').disabled = roundActive;
+  $('endTurn').disabled = gameOver || roundActive || !!pendingGemChoice;
+  $('startRound').disabled = gameOver || roundActive || !!pendingGemChoice;
+  $('difficulty').disabled = roundActive;
 
-  $('endTurn').disabled=
-    gameOver ||
-    roundActive ||
-    !!pendingGemChoice;
+  if (selectedGem) {
+    const info = getGemStats(selectedGem);
+    let extraActionHtml = '';
 
-  $('startRound').disabled=
-    gameOver ||
-    roundActive ||
-    !!pendingGemChoice;
+    // Action: Downgrade button (only for standard gems level 1 or higher)
+    if (!selectedGem.isCombo && selectedGem.level > 0) {
+      extraActionHtml += ` <button style="margin-left:8px; background:#e65100; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;" onclick="downgradeGem('${selectedGem.key}')">Downgrade (▼ ${GEM_LEVELS[selectedGem.level - 1]})</button>`;
+    }
 
-  $('difficulty').disabled=
-    roundActive;
-
-  // Replace the selectedGem block in updateStats() with this:
-if (selectedGem) {
-  const info = getGemStats(selectedGem);
-  let extraActionHtml = '';
-
-  // Check if this gem can complete any recipe on the board
-  if (!selectedGem.isCombo) {
-    for (const combo of COMBINATIONS) {
-      const ingKeys = findIngredientsForCombo(combo, selectedGem.key);
-      if (ingKeys) {
-        extraActionHtml = ` <button style="margin-left:8px; background:#2e7d32;" onclick="combineBoardGem('${combo.name}', '${selectedGem.key}')">Combine ➔ ${combo.name}</button>`;
-        break;
+    // Action: Check if this gem can complete any recipe on the board
+    if (!selectedGem.isCombo) {
+      for (const combo of COMBINATIONS) {
+        const ingKeys = findIngredientsForCombo(combo, selectedGem.key);
+        if (ingKeys) {
+          extraActionHtml += ` <button style="margin-left:8px; background:#2e7d32; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;" onclick="combineBoardGem('${combo.name}', '${selectedGem.key}')">Combine ➔ ${combo.name}</button>`;
+          break;
+        }
       }
     }
+
+    $('gemInfo').innerHTML = `<b>${info.name}</b> (${selectedGem.key})${extraActionHtml}`;
+  } else {
+    $('gemInfo').innerHTML = selectedStone ? `Selected Tile: ${selectedStone}` : 'None';
   }
 
-  $('gemInfo').innerHTML = `<b>${info.name}</b> (${selectedGem.key})${extraActionHtml}`;
+    $('gemInfo').innerHTML = `<b>${info.name}</b> (${selectedGem.key})${extraActionHtml}`;
+  } else {
+    $('gemInfo').innerHTML = selectedStone ? `Selected Tile: ${selectedStone}` : 'None';
+  }
 }
 
 function setMessage(s) {
-  $('message').textContent=s;
+  $('message').textContent = s;
 }
 
 // ---------------------------------------------------------------------------
