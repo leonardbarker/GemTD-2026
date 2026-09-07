@@ -150,28 +150,28 @@
   </div>
 </div>
 
-<script>
-const N = 20;
-const canvas = document.getElementById('board');
-const ctx = canvas.getContext('2d');
-const cell = canvas.width / N;
-
-let seed = 1, turn = 1, stonesLeft = 5;
-let blocked = new Set();
-let points = [];
-let path = [];
-let pathPixels = [];
-
-const $ = id => document.getElementById(id);
-
-<!-- Inside index.html -->
 <script type="module">
-  // Import the constants from your new definition files
+  // 1. Module Imports at the very top
   import { GEM_LEVELS, GEM_TYPES } from './js/definitions/gemTypes.js';
   import { COMBO_GEMS, COMBINATIONS, COMBO_UPGRADES } from './js/definitions/comboGems.js';
   import { CREEP_TYPES, WAVES, DIFFICULTIES } from './js/definitions/creeps.js';
 
-  // --- REST OF YOUR EXISTING GAME CODE HERE ---
+  // 2. Global Constants & Canvas Setup
+  const N = 20;
+  const canvas = document.getElementById('board');
+  const ctx = canvas.getContext('2d');
+  const cell = canvas.width / N;
+
+  // 3. State Variables
+  let seed = 1, turn = 1, stonesLeft = 5;
+  let blocked = new Set();
+  let points = [];
+  let path = [];
+  let pathPixels = [];
+
+  const $ = id => document.getElementById(id);
+
+  // --- REST OF YOUR GAME LOGIC HERE ---
 </script>
 
 // ---------------------------------------------------------------------------
