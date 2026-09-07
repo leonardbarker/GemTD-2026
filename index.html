@@ -164,6 +164,16 @@ let pathPixels = [];
 
 const $ = id => document.getElementById(id);
 
+<!-- Inside index.html -->
+<script type="module">
+  // Import the constants from your new definition files
+  import { GEM_LEVELS, GEM_TYPES } from './js/definitions/gemTypes.js';
+  import { COMBO_GEMS, COMBINATIONS, COMBO_UPGRADES } from './js/definitions/comboGems.js';
+  import { CREEP_TYPES, WAVES, DIFFICULTIES } from './js/definitions/creeps.js';
+
+  // --- REST OF YOUR EXISTING GAME CODE HERE ---
+</script>
+
 // ---------------------------------------------------------------------------
 // Gem data model
 // ---------------------------------------------------------------------------
