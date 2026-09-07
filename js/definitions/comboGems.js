@@ -1,4 +1,56 @@
+// js/definitions/comboGems.js
+//
+// Special (combination) gem definitions, ported from the original Gem Tower
+// Defense special-gem list (https://gemtowerdefense.fandom.com/wiki/Special_gems).
+//
+// Gems with a `tiers` array are upgradeable in place: gem.level indexes into
+// `tiers` (0 = base combo, increasing on each gold-funded upgrade). Each tier
+// entry is a full stat block plus `upgradeCost` (gold cost to reach the NEXT
+// tier; null on the final tier). maxTargets: Infinity means "hits everything
+// in range" (Mighty Malachite's "All" targets).
+//
+// Gems still on the flat `stats` shape are placeholders awaiting their turn
+// in the conversion order (Malachite -> Silver -> Star Ruby -> Jade -> Red
+// Crystal -> Black Opal -> Blood Stone -> Dark Emerald -> Gold -> Pink
+// Diamond -> Uranium -> Yellow Sapphire -> Tourmaline).
+
 export const COMBO_GEMS = {
+  "Malachite": {
+    colour: '#10ac84',
+    icon: '🔗',
+    short: 'MLC',
+    role: 'Multi-Target',
+    // NOTE: the wiki's Malachite entry does not state a damage colour/type.
+    // Two of its three ingredients (Opal, Emerald) are magic damage and one
+    // (Aquamarine) is physical, so this is set to magic as a judgement call
+    // pending confirmation - flag if you want it changed.
+    tiers: [
+      {
+        name: 'Malachite',
+        dmgMin: 6, dmgMax: 6,
+        cooldown: 500, range: 107,
+        maxTargets: 3,
+        damageType: 'magic',
+        upgradeCost: 25
+      },
+      {
+        name: 'Vivid Malachite',
+        dmgMin: 11, dmgMax: 11,
+        cooldown: 500, range: 114,
+        maxTargets: 4,
+        damageType: 'magic',
+        upgradeCost: 280
+      },
+      {
+        name: 'Mighty Malachite',
+        dmgMin: 45, dmgMax: 45,
+        cooldown: 550, range: 114,
+        maxTargets: Infinity,
+        damageType: 'magic',
+        upgradeCost: null
+      }
+    ]
+  },
   "Silver Knight": {
     colour: '#dcdde1',
     icon: '⚔️',
@@ -10,79 +62,18 @@ export const COMBO_GEMS = {
       damageType: 'physical',
       slowPct: 0.40, slowDur: 2000
     }
-  },
-  "Malachite": {
-    colour: '#10ac84',
-    icon: '☣️',
-    short: 'ML',
-    role: 'Poison Splash',
-    stats: {
-      dmgMin: 20, dmgMax: 28, cooldown: 900, range: 110,
-      damageType: 'magic',
-      poisonDps: 22, poisonDur: 3500,
-      splashRadius: 65
-    }
-  },
-  "Jade": {
-    colour: '#2ecc71',
-    icon: '❇️',
-    short: 'JD',
-    role: 'Poison & Slow',
-    stats: {
-      dmgMin: 30, dmgMax: 42, cooldown: 800, range: 120,
-      damageType: 'magic',
-      poisonDps: 30, poisonDur: 4000,
-      slowPct: 0.35, slowDur: 2500
-    }
-  },
-  "Red Crystal": {
-    colour: '#e74c3c',
-    icon: '🔻',
-    short: 'RC',
-    role: 'Heavy Splash Attack',
-    stats: {
-      dmgMin: 65, dmgMax: 85, cooldown: 850, range: 125,
-      damageType: 'physical',
-      splashRadius: 75
-    }
-  },
-  "Dark Emerald": {
-    colour: '#1abc9c',
-    icon: '🟢',
-    short: 'DE',
-    role: 'Multi-Target Poison',
-    stats: {
-      dmgMin: 25, dmgMax: 35, cooldown: 750, range: 120,
-      damageType: 'magic',
-      maxTargets: 3,
-      poisonDps: 28, poisonDur: 3500
-    }
-  },
-  "Yellow Sapphire": {
-    colour: '#f1c40f',
-    icon: '🌟',
-    short: 'YS',
-    role: 'Rapid Armor Pierce',
-    stats: {
-      dmgMin: 35, dmgMax: 50, cooldown: 450, range: 130,
-      trueDamage: true,
-      damageType: 'physical'
-    }
-  },
-  "Star Ruby": {
-    colour: '#9b59b6',
-    icon: '⭐',
-    short: 'SR',
-    role: 'Heavy Multi-Target',
-    stats: {
-      dmgMin: 55, dmgMax: 75, cooldown: 800, range: 135,
-      damageType: 'physical',
-      maxTargets: 4
-    }
   }
 };
 
 export const COMBINATIONS = [
+  {
+    name: "Malachite",
+    requires: [
+      { q: "Chipped", t: "Opal" },
+      { q: "Chipped", t: "Emerald" },
+      { q: "Chipped", t: "Aquamarine" }
+    ]
+  },
   {
     name: "Silver Knight",
     requires: [
@@ -90,94 +81,14 @@ export const COMBINATIONS = [
       { q: "Chipped", t: "Diamond" },
       { q: "Chipped", t: "Sapphire" }
     ]
-  },
-  {
-    name: "Malachite",
-    requires: [
-      { q: "Chipped", t: "Emerald" },
-      { q: "Chipped", t: "Emerald" },
-      { q: "Chipped", t: "Amethyst" }
-    ]
-  },
-  {
-    name: "Jade",
-    requires: [
-      { q: "Chipped", t: "Emerald" },
-      { q: "Chipped", t: "Opal" },
-      { q: "Chipped", t: "Aquamarine" }
-    ]
-  },
-  {
-    name: "Red Crystal",
-    requires: [
-      { q: "Chipped", t: "Ruby" },
-      { q: "Chipped", t: "Emerald" },
-      { q: "Chipped", t: "Topaz" }
-    ]
-  },
-  {
-    name: "Dark Emerald",
-    requires: [
-      { q: "Flawed", t: "Emerald" },
-      { q: "Flawed", t: "Sapphire" },
-      { q: "Chipped", t: "Topaz" }
-    ]
-  },
-  {
-    name: "Yellow Sapphire",
-    requires: [
-      { q: "Chipped", t: "Sapphire" },
-      { q: "Chipped", t: "Topaz" },
-      { q: "Chipped", t: "Ruby" }
-    ]
-  },
-  {
-    name: "Star Ruby",
-    requires: [
-      { q: "Flawed", t: "Ruby" },
-      { q: "Chipped", t: "Ruby" },
-      { q: "Chipped", t: "Topaz" }
-    ]
   }
 ];
 
+// Legacy single-step upgrade text, still used for combo gems that haven't
+// been converted to the `tiers` shape yet.
 export const COMBO_UPGRADES = {
   "Silver Knight": {
     name: "Knight's Bulwark",
     effect: "Adds a chance to stun on hit."
-  },
-  "Malachite": {
-    name: "Toxic Bloom",
-    effect: "Poison spreads to nearby creeps on death."
-  },
-  "Jade": {
-    name: "Emerald Resonance",
-    effect: "Increases poison damage by 50%."
-  },
-  "Red Crystal": {
-    name: "Magma Burst",
-    effect: "Increases splash radius and impact damage."
-  },
-  "Dark Emerald": {
-    name: "Shadow Decay",
-    effect: "Applies armor reduction alongside poison."
-  },
-  "Yellow Sapphire": {
-    name: "Solar Flare",
-    effect: "Increases attack speed and range."
-  },
-  "Star Ruby": {
-    name: "Starlight Cascade",
-    effect: "Strikes up to 2 additional targets."
   }
 };
-
-function selectGem(gem) {
-    // 1. Process gem selection logic
-    applyGemEffect(gem);
-    
-    // 2. Autoplay: Automatically transition to the next round
-    setTimeout(() => {
-        startNextRound(); // Replace with your actual next-round function name
-    }, 500); // Optional brief delay so the player sees their selection
-}
