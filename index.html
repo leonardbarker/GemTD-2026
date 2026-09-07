@@ -151,7 +151,7 @@
 </div>
 
 <script type="module">
-  // 1. Module Imports at the very top
+  // 1. Module Imports
   import { GEM_LEVELS, GEM_TYPES } from './js/definitions/gemTypes.js';
   import { COMBO_GEMS, COMBINATIONS, COMBO_UPGRADES } from './js/definitions/comboGems.js';
   import { CREEP_TYPES, WAVES, DIFFICULTIES } from './js/definitions/creeps.js';
@@ -171,1203 +171,772 @@
 
   const $ = id => document.getElementById(id);
 
-  // --- REST OF YOUR GAME LOGIC HERE ---
-</script>
+  // ---------------------------------------------------------------------------
+  // Gem data state
+  // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Gem data model
-// ---------------------------------------------------------------------------
+  let gems = new Map();
+  let gemAvailable = true;
+  let selectedGem = null;
+  let selectedStone = null;
+  let hoveredGemKey = null;
+  let pendingGemChoice = null;
 
-const GEM_LEVELS = [
-  "Chipped",
-  "Flawed",
-  "Normal",
-  "Flawless",
-  "Perfect"
-];
+  // ---------------------------------------------------------------------------
+  // Gem helpers
+  // ---------------------------------------------------------------------------
 
-const GEM_TYPES = {
-  Amethyst: {
-    icon: "🔮",
-    colour: "#9b59b6",
-    role: "Single-target, prefers air/Violet targets",
-    levels: [ /* ... */ ]
-  },
-  Aquamarine: {
-    icon: "💧",
-    colour: "#45c4d8",
-    role: "Long-range single target",
-    levels: [ /* ... */ ]
-  },
-  Diamond: {
-    icon: "💎",
-    colour: "#eeeeee",
-    role: "True damage, ignores armour",
-    levels: [ /* ... */ ]
-  },
-  Emerald: {
-    icon: "🟢",
-    colour: "#35c96b",
-    role: "Poison damage over time + slow",
-    levels: [ /* ... */ ]
-  },
-  Opal: {
-    icon: "✨",
-    colour: "#d8d8e8",
-    role: "Damage + attack-speed aura for nearby towers",
-    auraRadius: 160,
-    levels: [ /* ... */ ]
-  },
-  Ruby: {
-    icon: "🔴",
-    colour: "#e74c3c",
-    role: "Splash damage around the target",
-    levels: [ /* ... */ ]
-  },
-  Sapphire: {
-    icon: "🔵",
-    colour: "#4b86e8",
-    role: "Slows movement speed",
-    levels: [ /* ... */ ]
-  },
-  Topaz: {
-    icon: "🟡",
-    colour: "#e8bd4a",
-    role: "Attacks several targets at once",
-    levels: [ /* ... */ ]
-  }
-};
-
-// ---------------------------------------------------------------------------
-// Combination recipes
-// ---------------------------------------------------------------------------
-
-const COMBINATIONS = [
-  {
-    name:"Black Opal",
-    requires:[
-      {q:"Perfect",t:"Opal"},
-      {q:"Flawless",t:"Diamond"},
-      {q:"Normal",t:"Aquamarine"}
-    ]
-  },
-  {
-    name:"Dark Emerald",
-    requires:[
-      {q:"Perfect",t:"Emerald"},
-      {q:"Flawless",t:"Sapphire"},
-      {q:"Flawed",t:"Topaz"}
-    ]
-  },
-  {
-    name:"Blood Stone",
-    requires:[
-      {q:"Perfect",t:"Ruby"},
-      {q:"Flawless",t:"Aquamarine"},
-      {q:"Normal",t:"Amethyst"}
-    ]
-  },
-  {
-    name:"Yellow Sapphire",
-    requires:[
-      {q:"Perfect",t:"Sapphire"},
-      {q:"Flawless",t:"Ruby"},
-      {q:"Flawless",t:"Topaz"}
-    ]
-  },
-  {
-    name:"Uranium 238",
-    requires:[
-      {q:"Perfect",t:"Topaz"},
-      {q:"Flawed",t:"Opal"},
-      {q:"Normal",t:"Sapphire"}
-    ]
-  },
-  {
-    name:"Tourmaline",
-    requires:[
-      {q:"Perfect",t:"Aquamarine"},
-      {q:"Flawless",t:"Opal"},
-      {q:"Flawed",t:"Aquamarine"},
-      {q:"Flawed",t:"Emerald"}
-    ]
-  },
-  {
-    name:"Star Ruby",
-    requires:[
-      {q:"Chipped",t:"Amethyst"},
-      {q:"Chipped",t:"Ruby"},
-      {q:"Flawed",t:"Ruby"}
-    ]
-  },
-  {
-    name:"Silver",
-    requires:[
-      {q:"Chipped",t:"Sapphire"},
-      {q:"Chipped",t:"Diamond"},
-      {q:"Chipped",t:"Topaz"}
-    ]
-  },
-  {
-    name:"Red Crystal",
-    requires:[
-      {q:"Flawless",t:"Emerald"},
-      {q:"Normal",t:"Ruby"},
-      {q:"Flawed",t:"Amethyst"}
-    ]
-  },
-  {
-    name:"Pink Diamond",
-    requires:[
-      {q:"Perfect",t:"Diamond"},
-      {q:"Normal",t:"Diamond"},
-      {q:"Normal",t:"Topaz"}
-    ]
-  },
-  {
-    name:"Malachite",
-    requires:[
-      {q:"Chipped",t:"Opal"},
-      {q:"Chipped",t:"Emerald"},
-      {q:"Chipped",t:"Aquamarine"}
-    ]
-  },
-  {
-    name:"Jade",
-    requires:[
-      {q:"Normal",t:"Emerald"},
-      {q:"Normal",t:"Opal"},
-      {q:"Flawed",t:"Sapphire"}
-    ]
-  },
-  {
-    name:"Gold",
-    requires:[
-      {q:"Perfect",t:"Amethyst"},
-      {q:"Flawless",t:"Amethyst"},
-      {q:"Flawed",t:"Diamond"}
-    ]
-  }
-];
-
-const COMBO_UPGRADES = {
-  "Black Opal": {
-    name:"Mystic Black Opal",
-    cost:250,
-    effect:"+40% damage buff within 171 range; overrides Yellow Sapphire"
-  },
-  "Dark Emerald": {
-    name:"Enchanted Emerald",
-    cost:250,
-    effect:"100-200 dmg, 700ms, 15% stun 2s, 15% 4x crit, 1.5x vs air"
-  },
-  "Blood Stone": {
-    name:"Ancient Blood Stone",
-    cost:250,
-    effect:"160-240 dmg, 800ms, 15% 3x crit, 10% burn 5s (100 dmg/0.2s), ignores armour/colour"
-  },
-  "Yellow Sapphire": {
-    name:"Yellow Sapphire",
-    cost:0,
-    effect:"Splash radius 57"
-  },
-  "Uranium 238": {
-    name:"Uranium 235",
-    cost:0,
-    effect:"64 dmg, 250ms, same slow aura"
-  },
-  "Tourmaline": {
-    name:"Paraiba Tourmaline",
-    cost:350,
-    effect:"30-420 dmg, 750ms, -6 armour @93 range, fixed ~100 DPS"
-  },
-  "Star Ruby": {
-    name:"Star Ruby",
-    cost:0,
-    effect:"Damage scales with kills; unaffected by colour/Opals"
-  },
-  "Silver": {
-    name:"Silver",
-    cost:0,
-    effect:"Splash radius 36 every hit"
-  },
-  "Red Crystal": {
-    name:"Rose Quartz Crystal",
-    cost:0,
-    effect:"100-125 dmg, 800ms, -6 air armour aura (via Red Crystal Facet)"
-  },
-  "Pink Diamond": {
-    name:"Great Pink Diamond",
-    cost:175,
-    effect:"175-225 dmg, 650ms, 10% 8x crit"
-  },
-  "Malachite": {
-    name:"Mighty Malachite",
-    cost:280,
-    effect:"45-45 dmg, 550ms, all targets in range (via Vivid Malachite)"
-  },
-  "Jade": {
-    name:"Lucky Asian Jade",
-    cost:250,
-    effect:"55-55 dmg, 350ms, 4s DoT, 1% gold proc, 1% 2s stun, 5x crit"
-  },
-  "Gold": {
-    name:"Egyptian Gold",
-    cost:210,
-    effect:"160-200 dmg, 750ms, -8 armour, 30% 2x crit"
-  }
-};
-
-const COMBO_GEMS = {
-  "Black Opal": {
-    colour:"#3a2a52",
-    short:"BO",
-    role:"Support + damage; wide attack-speed aura (placeholder stats)",
-    auraRadius:200,
-    stats:{
-      dmgMin:100,
-      dmgMax:130,
-      cooldown:900,
-      range:130,
-      auraPct:0.30
+  function getGemStats(gem) {
+    if (!gem) {
+      return { name: 'Unknown', color: '#cccccc', colour: '#cccccc', icon: '💎', short: '??', stats: {} };
     }
-  },
 
-  "Dark Emerald": {
-    colour:"#0e5c33",
-    short:"DE",
-    role:"Heavy poison + slow (placeholder stats)",
-    stats:{
-      dmgMin:110,
-      dmgMax:150,
-      cooldown:900,
-      range:110,
-      poisonDps:24,
-      poisonDur:5000,
-      slowPct:0.45,
-      slowDur:4000
+    // Handle Combination Gems
+    if (gem.isCombo) {
+      const def = COMBO_GEMS[gem.type] || {};
+      const hexColor = def.colour || def.color || '#ff00ff';
+      return {
+        name: gem.type,
+        color: hexColor,
+        colour: hexColor,
+        icon: def.icon || def.short || '💎',
+        short: def.short || 'CB',
+        role: def.role || 'Special',
+        stats: def.stats || {},
+        auraRadius: def.auraRadius || 0
+      };
     }
-  },
 
-  "Blood Stone": {
-    colour:"#7a1414",
-    short:"BS",
-    role:"Splash + single-target hybrid (placeholder stats)",
-    stats:{
-      dmgMin:120,
-      dmgMax:170,
-      cooldown:1000,
-      range:120,
-      splashRadius:45
-    }
-  },
+    // Handle Standard Gems
+    const def = GEM_TYPES[gem.type] || {};
+    const hexColor = def.colour || def.color || '#ffffff';
+    const quality = GEM_LEVELS[gem.level] || '';
 
-  "Yellow Sapphire": {
-    colour:"#e8d34a",
-    short:"YS",
-    role:"Splash damage with a heavy slow",
-    stats:{
-      dmgMin:96,
-      dmgMax:128,
-      cooldown:1000,
-      range:100,
-      slowPct:0.50,
-      slowDur:4000,
-      splashRadius:57
-    }
-  },
-
-  "Uranium 238": {
-    colour:"#7fdb5c",
-    short:"U2",
-    role:"Very fast rapid-fire slow",
-    stats:{
-      dmgMin:47,
-      dmgMax:47,
-      cooldown:250,
-      range:110,
-      slowPct:0.50,
-      slowDur:1500
-    }
-  },
-
-  "Tourmaline": {
-    colour:"#3fd4c0",
-    short:"TM",
-    role:"High-variance heavy hitter (mana/armour-shred not modelled)",
-    stats:{
-      dmgMin:10,
-      dmgMax:400,
-      cooldown:750,
-      range:110
-    }
-  },
-
-  "Star Ruby": {
-    colour:"#ff6b4a",
-    short:"SR",
-    role:"Splash tower (kill-scaling not modelled)",
-    stats:{
-      dmgMin:30,
-      dmgMax:40,
-      cooldown:900,
-      range:105,
-      splashRadius:20
-    }
-  },
-
-  "Silver": {
-    colour:"#c7c7c7",
-    short:"AG",
-    role:"Wide splash on every hit",
-    stats:{
-      dmgMin:20,
-      dmgMax:28,
-      cooldown:950,
-      range:95,
-      splashRadius:36
-    }
-  },
-
-  "Red Crystal": {
-    colour:"#e0455a",
-    short:"RC",
-    role:"Fast single target (air-only restriction not modelled - no air creeps yet)",
-    stats:{
-      dmgMin:50,
-      dmgMax:75,
-      cooldown:800,
-      range:100
-    }
-  },
-
-  "Pink Diamond": {
-    colour:"#f2a6c9",
-    short:"PD",
-    role:"Heavy single target (crit chance not modelled)",
-    stats:{
-      dmgMin:150,
-      dmgMax:175,
-      cooldown:750,
-      range:100
-    }
-  },
-
-  "Malachite": {
-    colour:"#2f9e6a",
-    short:"ML",
-    role:"Fast multi-target",
-    stats:{
-      dmgMin:6,
-      dmgMax:6,
-      cooldown:500,
-      range:100,
-      maxTargets:3
-    }
-  },
-
-  "Jade": {
-    colour:"#4fae66",
-    short:"JD",
-    role:"Fast poison + slow",
-    stats:{
-      dmgMin:30,
-      dmgMax:35,
-      cooldown:500,
-      range:100,
-      poisonDps:5,
-      poisonDur:2000,
-      slowPct:0.50,
-      slowDur:2000
-    }
-  },
-
-  "Gold": {
-    colour:"#d4af37",
-    short:"AU",
-    role:"Heavy single target (armour shred, crit chance not modelled)",
-    stats:{
-      dmgMin:160,
-      dmgMax:190,
-      cooldown:1000,
-      range:100
-    }
-  }
-};
-
-let gems = new Map();
-let gemAvailable = true;
-let selectedGem = null;
-let selectedStone = null;
-let hoveredGemKey = null;
-let pendingGemChoice = null;
-
-// ---------------------------------------------------------------------------
-// Gem helpers
-// ---------------------------------------------------------------------------
-
-function getGemStats(gem) {
-  if (!gem) {
-    return { name: 'Unknown', color: '#cccccc', colour: '#cccccc', icon: '💎', short: '??', stats: {} };
-  }
-
-  // Handle Combination Gems
-  if (gem.isCombo) {
-    const def = COMBO_GEMS[gem.type] || {};
-    const hexColor = def.colour || def.color || '#ff00ff';
     return {
-      name: gem.type,
+      name: `${quality} ${gem.type}`.trim(),
       color: hexColor,
       colour: hexColor,
-      icon: def.icon || def.short || '💎',
-      short: def.short || 'CB',
-      role: def.role || 'Special',
-      stats: def.stats || {},
+      icon: def.icon || gem.type[0] || '💎',
+      short: gem.type[0] || 'G',
+      role: def.role || 'Basic',
+      stats: (def.levels && def.levels[gem.level]) ? def.levels[gem.level] : {},
       auraRadius: def.auraRadius || 0
     };
   }
 
-  // Handle Standard Gems
-  const def = GEM_TYPES[gem.type] || {};
-  const hexColor = def.colour || def.color || '#ffffff';
-  const quality = GEM_LEVELS[gem.level] || '';
+  // ---------------------------------------------------------------------------
+  // Difficulty State
+  // ---------------------------------------------------------------------------
 
-  return {
-    name: `${quality} ${gem.type}`.trim(),
-    color: hexColor,
-    colour: hexColor,
-    icon: def.icon || gem.type[0] || '💎',
-    short: gem.type[0] || 'G',
-    role: def.role || 'Basic',
-    stats: (def.levels && def.levels[gem.level]) ? def.levels[gem.level] : {},
-    auraRadius: def.auraRadius || 0
-  };
-}
+  let difficultyIndex = 2;
 
-// ---------------------------------------------------------------------------
-// Difficulty
-// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Combat state
+  // ---------------------------------------------------------------------------
 
-const DIFFICULTIES = [
-  { name:"Extreme", mult:Math.pow(0.85,0) },
-  { name:"Hard", mult:Math.pow(0.85,1) },
-  { name:"Normal", mult:Math.pow(0.85,2) },
-  { name:"Easy", mult:Math.pow(0.85,3) },
-  { name:"Very Easy", mult:Math.pow(0.85,4) }
-];
+  let round = 0;
+  let roundActive = false;
+  let creepsToSpawn = 0;
+  let spawnedThisRound = 0;
+  let lastSpawnTime = 0;
 
-let difficultyIndex = 2;
+  const SPAWN_INTERVAL_MS = 450;
+  const BASE_CREEP_SPEED = 95;
 
-// ---------------------------------------------------------------------------
-// Combat state
-// ---------------------------------------------------------------------------
+  const GAME_SPEED = 2;
 
-let round = 0;
-let roundActive = false;
-let creepsToSpawn = 0;
-let spawnedThisRound = 0;
-let lastSpawnTime = 0;
+  const MAX_LIVES = 20;
+  let livesLeft = MAX_LIVES;
+  let gameOver = false;
 
-const SPAWN_INTERVAL_MS = 450;
-const BASE_CREEP_SPEED = 95;
+  let activeCreeps = [];
+  let nextCreepId = 1;
+  let effects = [];
+  let combatLogEntries = [];
+  const MAX_LOG = 60;
 
-const GAME_SPEED = 2;
+  let lastFrameTime = performance.now();
 
-const MAX_LIVES = 20;
-let livesLeft = MAX_LIVES;
-let gameOver = false;
+  // ---------------------------------------------------------------------------
+  // RNG
+  // ---------------------------------------------------------------------------
 
-let activeCreeps = [];
-let nextCreepId = 1;
-let effects = [];
-let combatLogEntries = [];
-const MAX_LOG = 60;
+  function rngFactory(s) {
+    let x = s >>> 0;
 
-let lastFrameTime = performance.now();
+    return () => {
+      x ^= x << 13;
+      x ^= x >>> 17;
+      x ^= x << 5;
 
-// ---------------------------------------------------------------------------
-// RNG
-// ---------------------------------------------------------------------------
-
-function rngFactory(s) {
-  let x = s >>> 0;
-
-  return () => {
-    x ^= x << 13;
-    x ^= x >>> 17;
-    x ^= x << 5;
-
-    return ((x >>> 0) / 4294967296);
-  };
-}
-
-let rand = rngFactory(1);
-
-function randRange(min,max) {
-  return min + rand() * (max-min);
-}
-
-const key = (x,y) => `${x},${y}`;
-
-const inside = (x,y) =>
-  x >= 0 &&
-  x < N &&
-  y >= 0 &&
-  y < N;
-
-function shuffle(a) {
-  for (let i=a.length-1;i>0;i--) {
-    const j=Math.floor(rand()*(i+1));
-    [a[i],a[j]]=[a[j],a[i]];
+      return ((x >>> 0) / 4294967296);
+    };
   }
 
-  return a;
-}
+  let rand = rngFactory(1);
 
-// ---------------------------------------------------------------------------
-// Map generation
-// ---------------------------------------------------------------------------
+  function randRange(min,max) {
+    return min + rand() * (max-min);
+  }
 
-function generatePoints() {
-  const entrance = {
-    x:0,
-    y:Math.floor(N/2)
-  };
+  const key = (x,y) => `${x},${y}`;
 
-  const exit = {
-    x:N-1,
-    y:Math.floor(N/2)
-  };
+  const inside = (x,y) =>
+    x >= 0 &&
+    x < N &&
+    y >= 0 &&
+    y < N;
 
-  const xs = [3,6,9,11,14,16];
+  function shuffle(a) {
+    for (let i=a.length-1;i>0;i--) {
+      const j=Math.floor(rand()*(i+1));
+      [a[i],a[j]]=[a[j],a[i]];
+    }
 
-  const usedY = new Set([
-    entrance.y,
-    exit.y
-  ]);
+    return a;
+  }
 
-  const wps = xs.map((x,i) => {
-    let y;
+  // ---------------------------------------------------------------------------
+  // Map generation
+  // ---------------------------------------------------------------------------
 
-    for (let tries=0;tries<100;tries++) {
-      y = 2 + Math.floor(rand()*(N-4));
+  function generatePoints() {
+    const entrance = {
+      x:0,
+      y:Math.floor(N/2)
+    };
 
-      if (![...usedY].some(v => Math.abs(v-y)<2)) {
+    const exit = {
+      x:N-1,
+      y:Math.floor(N/2)
+    };
+
+    const xs = [3,6,9,11,14,16];
+
+    const usedY = new Set([
+      entrance.y,
+      exit.y
+    ]);
+
+    const wps = xs.map((x,i) => {
+      let y;
+
+      for (let tries=0;tries<100;tries++) {
+        y = 2 + Math.floor(rand()*(N-4));
+
+        if (![...usedY].some(v => Math.abs(v-y)<2)) {
+          break;
+        }
+      }
+
+      usedY.add(y);
+
+      return {
+        x,
+        y,
+        label:`WP${i+1}`
+      };
+    });
+
+    return [
+      entrance,
+      ...wps,
+      exit
+    ];
+  }
+
+  function makeMap() {
+    blocked.clear();
+    points = generatePoints();
+    resetCombat();
+    recompute();
+  }
+
+  function neighbours(p) {
+    return shuffle([
+      {x:p.x+1,y:p.y},
+      {x:p.x-1,y:p.y},
+      {x:p.x,y:p.y+1},
+      {x:p.x,y:p.y-1}
+    ].filter(q => inside(q.x,q.y)));
+  }
+
+  function bfs(start,goal) {
+    const q=[start];
+
+    const came=new Map([
+      [key(start.x,start.y),null]
+    ]);
+
+    for (let head=0;head<q.length;head++) {
+      const p=q[head];
+
+      if (p.x===goal.x && p.y===goal.y) {
         break;
       }
-    }
 
-    usedY.add(y);
+      for (const n of neighbours(p)) {
+        const k=key(n.x,n.y);
 
-    return {
-      x,
-      y,
-      label:`WP${i+1}`
-    };
-  });
+        if (blocked.has(k) || came.has(k)) {
+          continue;
+        }
 
-  return [
-    entrance,
-    ...wps,
-    exit
-  ];
-}
-
-function makeMap() {
-  blocked.clear();
-  points = generatePoints();
-  resetCombat();
-  recompute();
-}
-
-function neighbours(p) {
-  return shuffle([
-    {x:p.x+1,y:p.y},
-    {x:p.x-1,y:p.y},
-    {x:p.x,y:p.y+1},
-    {x:p.x,y:p.y-1}
-  ].filter(q => inside(q.x,q.y)));
-}
-
-function bfs(start,goal) {
-  const q=[start];
-
-  const came=new Map([
-    [key(start.x,start.y),null]
-  ]);
-
-  for (let head=0;head<q.length;head++) {
-    const p=q[head];
-
-    if (p.x===goal.x && p.y===goal.y) {
-      break;
-    }
-
-    for (const n of neighbours(p)) {
-      const k=key(n.x,n.y);
-
-      if (blocked.has(k) || came.has(k)) {
-        continue;
+        came.set(k,p);
+        q.push(n);
       }
-
-      came.set(k,p);
-      q.push(n);
     }
-  }
 
-  const gk=key(goal.x,goal.y);
+    const gk=key(goal.x,goal.y);
 
-  if (!came.has(gk)) {
-    return null;
-  }
-
-  const out=[];
-  let p=goal;
-
-  while (p) {
-    out.push(p);
-    p=came.get(key(p.x,p.y));
-  }
-
-  return out.reverse();
-}
-
-function fullPath() {
-  const result=[];
-
-  for (let i=0;i<points.length-1;i++) {
-    const segment=bfs(points[i],points[i+1]);
-
-    if (!segment) {
+    if (!came.has(gk)) {
       return null;
     }
 
-    if (i) {
-      segment.shift();
+    const out=[];
+    let p=goal;
+
+    while (p) {
+      out.push(p);
+      p=came.get(key(p.x,p.y));
     }
 
-    result.push(...segment);
+    return out.reverse();
   }
 
-  return result;
-}
+  function fullPath() {
+    const result=[];
 
-function toPixelPath(gridPath) {
-  return gridPath.map(p => ({
-    x:(p.x+.5)*cell,
-    y:(p.y+.5)*cell
-  }));
-}
+    for (let i=0;i<points.length-1;i++) {
+      const segment=bfs(points[i],points[i+1]);
 
-function recompute() {
-  path=fullPath();
-  pathPixels=path ? toPixelPath(path) : [];
+      if (!segment) {
+        return null;
+      }
 
-  $('pathLen').textContent =
-    path ? path.length : 'BLOCKED';
+      if (i) {
+        segment.shift();
+      }
 
-  draw();
-}
+      result.push(...segment);
+    }
 
-// ---------------------------------------------------------------------------
-// Stone placement / gem conversion
-// ---------------------------------------------------------------------------
-
-function tryStone(x,y) {
-  if (gameOver) {
-    setMessage("Game over - start a new map to play again.");
-    return;
+    return result;
   }
 
-  if (roundActive) {
-    setMessage("Can't edit the maze while a round is in progress.");
-    return;
+  function toPixelPath(gridPath) {
+    return gridPath.map(p => ({
+      x:(p.x+.5)*cell,
+      y:(p.y+.5)*cell
+    }));
   }
 
-  if (pendingGemChoice) {
-    setMessage("Pick one of the three offered gems first.");
-    return;
+  function recompute() {
+    path=fullPath();
+    pathPixels=path ? toPixelPath(path) : [];
+
+    $('pathLen').textContent =
+      path ? path.length : 'BLOCKED';
+
+    draw();
   }
 
-  const k=key(x,y);
+  // ---------------------------------------------------------------------------
+  // Stone placement / gem conversion
+  // ---------------------------------------------------------------------------
 
-  if (blocked.has(k) && !gems.has(k)) {
-    selectedStone=k;
-    selectedGem=null;
+  function tryStone(x,y) {
+    if (gameOver) {
+      setMessage("Game over - start a new map to play again.");
+      return;
+    }
+
+    if (roundActive) {
+      setMessage("Can't edit the maze while a round is in progress.");
+      return;
+    }
+
+    if (pendingGemChoice) {
+      setMessage("Pick one of the three offered gems first.");
+      return;
+    }
+
+    const k=key(x,y);
+
+    if (blocked.has(k) && !gems.has(k)) {
+      selectedStone=k;
+      selectedGem=null;
+
+      setMessage(
+        `Stone at ${k} selected. Convert it to a random gem, or click another stone.`
+      );
+
+      updateStats();
+      draw();
+
+      return;
+    }
+
+    if (gems.has(k)) {
+      selectedGem={
+        key:k,
+        ...gems.get(k)
+      };
+
+      selectedStone=null;
+
+      setMessage(
+        `${getGemStats(selectedGem).name} selected.`
+      );
+
+      updateStats();
+      draw();
+
+      return;
+    }
+
+    if (stonesLeft<=0) {
+      return setMessage(
+        "No stones left this turn. End the turn to get 5 more."
+      );
+    }
+
+    if (points.some(p=>p.x===x && p.y===y)) {
+      return setMessage(
+        "You can't place a stone on a waypoint."
+      );
+    }
+
+    blocked.add(k);
+
+    const candidate=fullPath();
+
+    if (!candidate) {
+      blocked.delete(k);
+
+      return setMessage(
+        "Invalid placement: it would block the route."
+      );
+    }
+
+    stonesLeft--;
+
+    path=candidate;
+    pathPixels=toPixelPath(path);
 
     setMessage(
-      `Stone at ${k} selected. Convert it to a random gem, or click another stone.`
+      `Stone placed. ${stonesLeft} stone${stonesLeft===1?'':'s'} remaining.`
     );
 
     updateStats();
     draw();
-
-    return;
   }
 
-  if (gems.has(k)) {
+  // ---------------------------------------------------------------------------
+  // Gem quality
+  // ---------------------------------------------------------------------------
+
+  function gemQualityProbabilities(L) {
+    if (L < 3) {
+      return {
+        Chipped:0.60,
+        Flawed:0.40,
+        Normal:0,
+        Flawless:0,
+        Perfect:0
+      };
+    }
+
+    const rateNormal =
+      Math.min(0.40,(L-2)*0.10);
+
+    const rateFlawless =
+      L < 7
+        ? 0
+        : Math.min(0.30,(L-6)*0.10);
+
+    const ratePerfect =
+      L < 11
+        ? 0
+        : Math.min(0.20,(L-10)*0.10);
+
+    const totalHigh =
+      rateNormal +
+      rateFlawless +
+      ratePerfect;
+
+    const poolLow =
+      Math.max(0.10,1.0-totalHigh);
+
+    return {
+      Chipped:poolLow*0.55,
+      Flawed:poolLow*0.45,
+      Normal:rateNormal,
+      Flawless:rateFlawless,
+      Perfect:ratePerfect
+    };
+  }
+
+  function pickGemLevel(L) {
+    const probs=gemQualityProbabilities(L);
+
+    const r=rand();
+
+    let cum=0;
+
+    for (let i=0;i<GEM_LEVELS.length;i++) {
+      cum+=probs[GEM_LEVELS[i]];
+
+      if (r<cum) {
+        return i;
+      }
+    }
+
+    return GEM_LEVELS.length-1;
+  }
+
+  function matchCombo(options) {
+    const rolled=options
+      .map(o => `${GEM_LEVELS[o.level]} ${o.type}`)
+      .sort();
+
+    for (const c of COMBINATIONS) {
+      if (c.requires.length!==options.length) {
+        continue;
+      }
+
+      const need=c.requires
+        .map(r => `${r.q} ${r.t}`)
+        .sort();
+
+      if (need.every((v,i)=>v===rolled[i])) {
+        return c.name;
+      }
+    }
+
+    return null;
+  }
+
+  function offerGemChoices() {
+    if (gameOver) {
+      return setMessage(
+        "Game over - start a new map to play again."
+      );
+    }
+
+    if (roundActive) {
+      return setMessage(
+        "Can't convert gems while a round is in progress."
+      );
+    }
+
+    if (!gemAvailable) {
+      return setMessage(
+        "You have already converted a stone this turn."
+      );
+    }
+
+    if (!selectedStone || !blocked.has(selectedStone)) {
+      return setMessage(
+        "Select one of your stones first."
+      );
+    }
+
+    const types=Object.keys(GEM_TYPES);
+    const options=[];
+
+    for (let i=0;i<3;i++) {
+      options.push({
+        type:types[Math.floor(rand()*types.length)],
+        level:pickGemLevel(turn)
+      });
+    }
+
+    const comboMatch=matchCombo(options);
+
+    pendingGemChoice={
+      stoneKey:selectedStone,
+      options,
+      comboMatch
+    };
+
+    setMessage(
+      comboMatch
+        ? `Pick one of the three gems - or combine all three into a ${comboMatch}!`
+        : "Pick one of the three gems to create at that stone."
+    );
+
+    renderGemChoicePanel();
+    updateStats();
+  }
+
+  function chooseGem(index) {
+    if (!pendingGemChoice) {
+      return;
+    }
+
+    const {
+      stoneKey,
+      options
+    }=pendingGemChoice;
+
+    const choice=options[index];
+
+    if (!choice) {
+      return;
+    }
+
+    gems.set(
+      stoneKey,
+      {
+        type:choice.type,
+        level:choice.level,
+        lastAttack:0
+      }
+    );
+
+    gemAvailable=false;
+
     selectedGem={
-      key:k,
-      ...gems.get(k)
+      key:stoneKey,
+      ...choice,
+      lastAttack:0
     };
 
     selectedStone=null;
+    pendingGemChoice=null;
 
-    setMessage(
-      `${getGemStats(selectedGem).name} selected.`
+    logEvent(
+      `${GEM_LEVELS[choice.level]} ${choice.type} created at ${stoneKey}.`
     );
 
+    renderGemChoicePanel();
     updateStats();
     draw();
 
-    return;
+    startRound();
   }
 
-  if (stonesLeft<=0) {
-    return setMessage(
-      "No stones left this turn. End the turn to get 5 more."
-    );
-  }
+  function chooseDuplicateUpgrade(type, targetLevel) {
+    if (!pendingGemChoice) return;
 
-  if (points.some(p=>p.x===x && p.y===y)) {
-    return setMessage(
-      "You can't place a stone on a waypoint."
-    );
-  }
+    const { stoneKey } = pendingGemChoice;
 
-  blocked.add(k);
-
-  const candidate=fullPath();
-
-  if (!candidate) {
-    blocked.delete(k);
-
-    return setMessage(
-      "Invalid placement: it would block the route."
-    );
-  }
-
-  stonesLeft--;
-
-  path=candidate;
-  pathPixels=toPixelPath(path);
-
-  setMessage(
-    `Stone placed. ${stonesLeft} stone${stonesLeft===1?'':'s'} remaining.`
-  );
-
-  updateStats();
-  draw();
-}
-
-// ---------------------------------------------------------------------------
-// Gem quality
-// ---------------------------------------------------------------------------
-
-function gemQualityProbabilities(L) {
-  if (L < 3) {
-    return {
-      Chipped:0.60,
-      Flawed:0.40,
-      Normal:0,
-      Flawless:0,
-      Perfect:0
-    };
-  }
-
-  const rateNormal =
-    Math.min(0.40,(L-2)*0.10);
-
-  const rateFlawless =
-    L < 7
-      ? 0
-      : Math.min(0.30,(L-6)*0.10);
-
-  const ratePerfect =
-    L < 11
-      ? 0
-      : Math.min(0.20,(L-10)*0.10);
-
-  const totalHigh =
-    rateNormal +
-    rateFlawless +
-    ratePerfect;
-
-  const poolLow =
-    Math.max(0.10,1.0-totalHigh);
-
-  return {
-    Chipped:poolLow*0.55,
-    Flawed:poolLow*0.45,
-    Normal:rateNormal,
-    Flawless:rateFlawless,
-    Perfect:ratePerfect
-  };
-}
-
-function pickGemLevel(L) {
-  const probs=gemQualityProbabilities(L);
-
-  const r=rand();
-
-  let cum=0;
-
-  for (let i=0;i<GEM_LEVELS.length;i++) {
-    cum+=probs[GEM_LEVELS[i]];
-
-    if (r<cum) {
-      return i;
-    }
-  }
-
-  return GEM_LEVELS.length-1;
-}
-
-function matchCombo(options) {
-  const rolled=options
-    .map(o => `${GEM_LEVELS[o.level]} ${o.type}`)
-    .sort();
-
-  for (const c of COMBINATIONS) {
-    if (c.requires.length!==options.length) {
-      continue;
-    }
-
-    const need=c.requires
-      .map(r => `${r.q} ${r.t}`)
-      .sort();
-
-    if (need.every((v,i)=>v===rolled[i])) {
-      return c.name;
-    }
-  }
-
-  return null;
-}
-
-function offerGemChoices() {
-  if (gameOver) {
-    return setMessage(
-      "Game over - start a new map to play again."
-    );
-  }
-
-  if (roundActive) {
-    return setMessage(
-      "Can't convert gems while a round is in progress."
-    );
-  }
-
-  if (!gemAvailable) {
-    return setMessage(
-      "You have already converted a stone this turn."
-    );
-  }
-
-  if (!selectedStone || !blocked.has(selectedStone)) {
-    return setMessage(
-      "Select one of your stones first."
-    );
-  }
-
-  const types=Object.keys(GEM_TYPES);
-  const options=[];
-
-  for (let i=0;i<3;i++) {
-    options.push({
-      type:types[Math.floor(rand()*types.length)],
-      level:pickGemLevel(turn)
+    gems.set(stoneKey, {
+      type: type,
+      level: targetLevel,
+      lastAttack: 0
     });
+
+    gemAvailable = false;
+    selectedGem = {
+      key: stoneKey,
+      type: type,
+      level: targetLevel,
+      lastAttack: 0
+    };
+
+    selectedStone = null;
+    pendingGemChoice = null;
+
+    logEvent(`Merged duplicates into a ${GEM_LEVELS[targetLevel]} ${type} at ${stoneKey}.`);
+
+    renderGemChoicePanel();
+    updateStats();
+    draw();
+
+    startRound();
   }
 
-  const comboMatch=matchCombo(options);
+  // Helper: Check if ingredients for a combo exist on the board including/excluding a selected gem
+  function findIngredientsForCombo(combo, targetKey) {
+    const targetGem = gems.get(targetKey);
+    if (!targetGem || targetGem.isCombo) return null;
 
-  pendingGemChoice={
-    stoneKey:selectedStone,
-    options,
-    comboMatch
-  };
+    const targetDescriptor = `${GEM_LEVELS[targetGem.level]} ${targetGem.type}`;
 
-  setMessage(
-    comboMatch
-      ? `Pick one of the three gems - or combine all three into a ${comboMatch}!`
-      : "Pick one of the three gems to create at that stone."
-  );
+    // Check if target gem is even part of this combo's recipe
+    const reqDescriptors = combo.requires.map(r => `${r.q} ${r.t}`);
+    if (!reqDescriptors.includes(targetDescriptor)) return null;
 
-  renderGemChoicePanel();
-  updateStats();
-}
+    // Track available board gems
+    const available = Array.from(gems.entries())
+      .filter(([k, g]) => !g.isCombo)
+      .map(([k, g]) => ({
+        key: k,
+        desc: `${GEM_LEVELS[g.level]} ${g.type}`,
+        used: false
+      }));
 
-function chooseGem(index) {
-  if (!pendingGemChoice) {
-    return;
-  }
+    const matchedKeys = [];
 
-  const {
-    stoneKey,
-    options
-  }=pendingGemChoice;
+    // Match target key first
+    const targetIdx = available.findIndex(g => g.key === targetKey);
+    if (targetIdx === -1) return null;
+    available[targetIdx].used = true;
+    matchedKeys.push(targetKey);
 
-  const choice=options[index];
+    // Match remaining requirements
+    const remainingReqs = [...reqDescriptors];
+    const targetReqIdx = remainingReqs.indexOf(targetDescriptor);
+    remainingReqs.splice(targetReqIdx, 1);
 
-  if (!choice) {
-    return;
-  }
-
-  gems.set(
-    stoneKey,
-    {
-      type:choice.type,
-      level:choice.level,
-      lastAttack:0
+    for (const req of remainingReqs) {
+      const match = available.find(g => !g.used && g.desc === req);
+      if (!match) return null; // Missing requirement
+      match.used = true;
+      matchedKeys.push(match.key);
     }
-  );
 
-  gemAvailable=false;
-
-  selectedGem={
-    key:stoneKey,
-    ...choice,
-    lastAttack:0
-  };
-
-  selectedStone=null;
-  pendingGemChoice=null;
-
-  logEvent(
-    `${GEM_LEVELS[choice.level]} ${choice.type} created at ${stoneKey}.`
-  );
-
-  renderGemChoicePanel();
-  updateStats();
-  draw();
-
-  startRound();
-}
-
-function chooseDuplicateUpgrade(type, targetLevel) {
-  if (!pendingGemChoice) return;
-
-  const { stoneKey } = pendingGemChoice;
-
-  gems.set(stoneKey, {
-    type: type,
-    level: targetLevel,
-    lastAttack: 0
-  });
-
-  gemAvailable = false;
-  selectedGem = {
-    key: stoneKey,
-    type: type,
-    level: targetLevel,
-    lastAttack: 0
-  };
-
-  selectedStone = null;
-  pendingGemChoice = null;
-
-  logEvent(`Merged duplicates into a ${GEM_LEVELS[targetLevel]} ${type} at ${stoneKey}.`);
-
-  renderGemChoicePanel();
-  updateStats();
-  draw();
-
-  startRound();
-}
-
-// Helper: Check if ingredients for a combo exist on the board including/excluding a selected gem
-function findIngredientsForCombo(combo, targetKey) {
-  const targetGem = gems.get(targetKey);
-  if (!targetGem || targetGem.isCombo) return null;
-
-  const targetDescriptor = `${GEM_LEVELS[targetGem.level]} ${targetGem.type}`;
-
-  // Check if target gem is even part of this combo's recipe
-  const reqDescriptors = combo.requires.map(r => `${r.q} ${r.t}`);
-  if (!reqDescriptors.includes(targetDescriptor)) return null;
-
-  // Track available board gems
-  const available = Array.from(gems.entries())
-    .filter(([k, g]) => !g.isCombo)
-    .map(([k, g]) => ({
-      key: k,
-      desc: `${GEM_LEVELS[g.level]} ${g.type}`,
-      used: false
-    }));
-
-  const matchedKeys = [];
-
-  // Match target key first
-  const targetIdx = available.findIndex(g => g.key === targetKey);
-  if (targetIdx === -1) return null;
-  available[targetIdx].used = true;
-  matchedKeys.push(targetKey);
-
-  // Match remaining requirements
-  const remainingReqs = [...reqDescriptors];
-  const targetReqIdx = remainingReqs.indexOf(targetDescriptor);
-  remainingReqs.splice(targetReqIdx, 1);
-
-  for (const req of remainingReqs) {
-    const match = available.find(g => !g.used && g.desc === req);
-    if (!match) return null; // Missing requirement
-    match.used = true;
-    matchedKeys.push(match.key);
+    return matchedKeys;
   }
 
-  return matchedKeys;
-}
+  // Perform board combination
+  function combineBoardGem(comboName, targetKey) {
+    const combo = COMBINATIONS.find(c => c.name === comboName);
+    if (!combo) return;
 
-// Perform board combination
-function combineBoardGem(comboName, targetKey) {
-  const combo = COMBINATIONS.find(c => c.name === comboName);
-  if (!combo) return;
+    const ingredientKeys = findIngredientsForCombo(combo, targetKey);
+    if (!ingredientKeys) return;
 
-  const ingredientKeys = findIngredientsForCombo(combo, targetKey);
-  if (!ingredientKeys) return;
+    // Convert other ingredient gems back to plain stones
+    ingredientKeys.forEach(k => {
+      if (k !== targetKey) {
+        gems.delete(k); // Deletes gem status; tile remains in `blocked` set as a plain stone
+      }
+    });
 
-  // Convert other ingredient gems back to plain stones
-  ingredientKeys.forEach(k => {
-    if (k !== targetKey) {
-      gems.delete(k); // Deletes gem status; tile remains in `blocked` set as a plain stone
+    // Upgrade target tile into the combined gem
+    gems.set(targetKey, {
+      type: comboName,
+      level: null,
+      isCombo: true,
+      lastAttack: 0
+    });
+
+    selectedGem = {
+      key: targetKey,
+      type: comboName,
+      level: null,
+      isCombo: true,
+      lastAttack: 0
+    };
+
+    logEvent(`✨ Board Recipe Complete! Combined into ${comboName} at ${targetKey}.`);
+    setMessage(`Created ${comboName}! Used ingredients revert to plain stones.`);
+
+    updateStats();
+    draw();
+  }
+    
+  function chooseComboGem() {
+    if (!pendingGemChoice || !pendingGemChoice.comboMatch) {
+      return;
     }
-  });
 
-  // Upgrade target tile into the combined gem
-  gems.set(targetKey, {
-    type: comboName,
-    level: null,
-    isCombo: true,
-    lastAttack: 0
-  });
+    const {
+      stoneKey,
+      comboMatch
+    }=pendingGemChoice;
 
-  selectedGem = {
-    key: targetKey,
-    type: comboName,
-    level: null,
-    isCombo: true,
-    lastAttack: 0
-  };
+    gems.set(
+      stoneKey,
+      {
+        type:comboMatch,
+        level:null,
+        isCombo:true,
+        lastAttack:0
+      }
+    );
 
-  logEvent(`✨ Board Recipe Complete! Combined into ${comboName} at ${targetKey}.`);
-  setMessage(`Created ${comboName}! Used ingredients revert to plain stones.`);
+    gemAvailable=false;
 
-  updateStats();
-  draw();
-}
-  
-function chooseComboGem() {
-  if (!pendingGemChoice || !pendingGemChoice.comboMatch) {
-    return;
-  }
-
-  const {
-    stoneKey,
-    comboMatch
-  }=pendingGemChoice;
-
-  gems.set(
-    stoneKey,
-    {
+    selectedGem={
+      key:stoneKey,
       type:comboMatch,
       level:null,
       isCombo:true,
       lastAttack:0
+    };
+
+    selectedStone=null;
+    pendingGemChoice=null;
+
+    logEvent(
+      `${comboMatch} deployed at ${stoneKey}, combined from all three offered gems.`
+    );
+
+    renderGemChoicePanel();
+    updateStats();
+    draw();
+
+    startRound();
+  }
+
+  function endTurn() {
+    if (gameOver) {
+      return setMessage(
+        "Game over - start a new map to play again."
+      );
     }
-  );
 
-  gemAvailable=false;
+    if (roundActive) {
+      return setMessage(
+        "Can't end the turn while a round is in progress."
+      );
+    }
 
-  selectedGem={
-    key:stoneKey,
-    type:comboMatch,
-    level:null,
-    isCombo:true,
-    lastAttack:0
-  };
-
-  selectedStone=null;
-  pendingGemChoice=null;
-
-  logEvent(
-    `${comboMatch} deployed at ${stoneKey}, combined from all three offered gems.`
-  );
-
-  renderGemChoicePanel();
-  updateStats();
-  draw();
-
-  startRound();
-}
-
-function endTurn() {
-  if (gameOver) {
-    return setMessage(
-      "Game over - start a new map to play again."
-    );
+    performEndTurn(false);
   }
 
-  if (roundActive) {
-    return setMessage(
-      "Can't end the turn while a round is in progress."
+  function performEndTurn(auto) {
+    turn++;
+    stonesLeft=5;
+    gemAvailable=true;
+    selectedGem=null;
+    selectedStone=null;
+    pendingGemChoice=null;
+
+    renderGemChoicePanel();
+
+    logEvent(`— Turn ${turn} begins —`);
+
+    setMessage(
+      auto
+        ? `Round ${round} complete. Turn ${turn} started automatically - 5 stones and 1 gem conversion available.`
+        : `Turn ${turn}. You have 5 stone placements and 1 gem conversion.`
     );
+
+    updateStats();
+    draw();
   }
-
-  performEndTurn(false);
-}
-
-function performEndTurn(auto) {
-  turn++;
-  stonesLeft=5;
-  gemAvailable=true;
-  selectedGem=null;
-  selectedStone=null;
-  pendingGemChoice=null;
-
-  renderGemChoicePanel();
-
-  logEvent(`— Turn ${turn} begins —`);
-
-  setMessage(
-    auto
-      ? `Round ${round} complete. Turn ${turn} started automatically - 5 stones and 1 gem conversion available.`
-      : `Turn ${turn}. You have 5 stone placements and 1 gem conversion.`
-  );
-
-  updateStats();
-  draw();
-}
-
-// ---------------------------------------------------------------------------
-// Combat
+  // ---------------------------------------------------------------------------
+// Combat State & Base Setup
 // ---------------------------------------------------------------------------
 
 function resetCombat() {
-  round=0;
-  roundActive=false;
-  creepsToSpawn=0;
-  spawnedThisRound=0;
+  round = 0;
+  roundActive = false;
+  creepsToSpawn = 0;
+  spawnedThisRound = 0;
 
-  activeCreeps=[];
-  effects=[];
-  nextCreepId=1;
+  activeCreeps = [];
+  effects = [];
+  nextCreepId = 1;
 
-  livesLeft=MAX_LIVES;
-  gameOver=false;
+  livesLeft = MAX_LIVES;
+  gameOver = false;
 
   for (const g of gems.values()) {
-    g.lastAttack=0;
+    g.lastAttack = 0;
   }
 }
 
-// Further 50% reduction in creep HP.
-// Previous scale: 0.34125
-// New scale: 0.170625
+// Global Creep HP scaling
 const GLOBAL_HP_SCALE = 0.075625;
 
 function baseCreepHp(forRound) {
-  const base=260+(forRound-1)*60;
+  const base = 260 + (forRound - 1) * 60;
 
   return base *
     DIFFICULTIES[difficultyIndex].mult *
@@ -1375,19 +944,13 @@ function baseCreepHp(forRound) {
 }
 
 function loseLife() {
-  livesLeft=Math.max(
-    0,
-    livesLeft-1
-  );
+  livesLeft = Math.max(0, livesLeft - 1);
 
-  if (livesLeft<=0 && !gameOver) {
-    gameOver=true;
-    roundActive=false;
+  if (livesLeft <= 0 && !gameOver) {
+    gameOver = true;
+    roundActive = false;
 
-    setMessage(
-      "Game over - out of lives. Start a new map to play again."
-    );
-
+    setMessage("Game over - out of lives. Start a new map to play again.");
     return true;
   }
 
@@ -1395,7 +958,7 @@ function loseLife() {
 }
 
 // ---------------------------------------------------------------------------
-// Gem Downgrade Logic
+// Gem Downgrade Logic & Maze Editing
 // ---------------------------------------------------------------------------
 
 function downgradeGem(key) {
@@ -1421,59 +984,40 @@ function downgradeGem(key) {
   // Refresh selection stats
   updateStats();
 }
-  
+
 function removeStone() {
   if (gameOver) {
-    return setMessage(
-      "Game over - start a new map to play again."
-    );
+    return setMessage("Game over - start a new map to play again.");
   }
 
   if (roundActive) {
-    return setMessage(
-      "Can't edit the maze while a round is in progress."
-    );
+    return setMessage("Can't edit the maze while a round is in progress.");
   }
 
   if (pendingGemChoice) {
-    return setMessage(
-      "Pick one of the three offered gems first."
-    );
+    return setMessage("Pick one of the three offered gems first.");
   }
 
   if (!selectedStone || !blocked.has(selectedStone)) {
-    return setMessage(
-      "Select a stone to remove first."
-    );
+    return setMessage("Select a stone to remove first.");
   }
 
   if (gems.has(selectedStone)) {
-    return setMessage(
-      "That's a gem, not a plain stone - gems can't be removed."
-    );
+    return setMessage("That's a gem, not a plain stone - gems can't be removed.");
   }
 
-  const k=selectedStone;
-
+  const k = selectedStone;
   blocked.delete(k);
 
-  const candidate=fullPath();
+  const candidate = fullPath();
 
-  path=candidate;
-  pathPixels=candidate
-    ? toPixelPath(candidate)
-    : [];
+  path = candidate;
+  pathPixels = candidate ? toPixelPath(candidate) : [];
 
-  stonesLeft=Math.min(
-    5,
-    stonesLeft+1
-  );
+  stonesLeft = Math.min(5, stonesLeft + 1);
+  selectedStone = null;
 
-  selectedStone=null;
-
-  setMessage(
-    `Stone removed at ${k}. ${stonesLeft} stone${stonesLeft===1?'':'s'} remaining.`
-  );
+  setMessage(`Stone removed at ${k}. ${stonesLeft} stone${stonesLeft === 1 ? '' : 's'} remaining.`);
 
   updateStats();
   draw();
@@ -1481,58 +1025,45 @@ function removeStone() {
 
 function startRound() {
   if (gameOver) {
-    return setMessage(
-      "Game over - start a new map to play again."
-    );
+    return setMessage("Game over - start a new map to play again.");
   }
 
   if (roundActive) {
-    return setMessage(
-      "A round is already in progress."
-    );
+    return setMessage("A round is already in progress.");
   }
 
   if (!path) {
-    return setMessage(
-      "The maze is blocked - fix the path before starting a round."
-    );
+    return setMessage("The maze is blocked - fix the path before starting a round.");
   }
 
   round++;
-  roundActive=true;
-  creepsToSpawn=20;
-  spawnedThisRound=0;
+  roundActive = true;
+  creepsToSpawn = 20;
+  spawnedThisRound = 0;
 
-  lastSpawnTime=
-    performance.now()-SPAWN_INTERVAL_MS;
+  lastSpawnTime = performance.now() - SPAWN_INTERVAL_MS;
 
-  setMessage(
-    `Round ${round} started. 20 creeps incoming.`
-  );
-
-  logEvent(
-    `— Round ${round} started —`
-  );
+  setMessage(`Round ${round} started. 20 creeps incoming.`);
+  logEvent(`— Round ${round} started —`);
 
   updateStats();
 }
 
 function spawnOneCreep() {
-  const hp=baseCreepHp(round);
-
-  const start=pathPixels[0];
+  const hp = baseCreepHp(round);
+  const start = pathPixels[0];
 
   activeCreeps.push({
-    id:nextCreepId++,
+    id: nextCreepId++,
     hp,
-    maxHp:hp,
-    segIndex:0,
-    segT:0,
-    x:start.x,
-    y:start.y,
-    slowPct:0,
-    slowUntil:0,
-    poison:null
+    maxHp: hp,
+    segIndex: 0,
+    segT: 0,
+    x: start.x,
+    y: start.y,
+    slowPct: 0,
+    slowUntil: 0,
+    poison: null
   });
 
   spawnedThisRound++;
@@ -1544,22 +1075,20 @@ function updateSpawning(now) {
   }
 
   if (
-    spawnedThisRound<creepsToSpawn &&
-    now-lastSpawnTime >= SPAWN_INTERVAL_MS/GAME_SPEED
+    spawnedThisRound < creepsToSpawn &&
+    now - lastSpawnTime >= SPAWN_INTERVAL_MS / GAME_SPEED
   ) {
     spawnOneCreep();
-    lastSpawnTime=now;
+    lastSpawnTime = now;
   }
 
   if (
-    spawnedThisRound>=creepsToSpawn &&
-    activeCreeps.length===0
+    spawnedThisRound >= creepsToSpawn &&
+    activeCreeps.length === 0
   ) {
-    roundActive=false;
+    roundActive = false;
 
-    logEvent(
-      `— Round ${round} complete —`
-    );
+    logEvent(`— Round ${round} complete —`);
 
     if (!gameOver) {
       performEndTurn(true);
@@ -1569,136 +1098,96 @@ function updateSpawning(now) {
   }
 }
 
-function updateCreeps(dt,now) {
-  if (
-    gameOver ||
-    activeCreeps.length===0
-  ) {
+function updateCreeps(dt, now) {
+  if (gameOver || activeCreeps.length === 0) {
     return;
   }
 
-  const survivors=[];
+  const survivors = [];
 
   for (const c of activeCreeps) {
-
-    if (c.poison && now<c.poison.until) {
-      c.hp-=c.poison.dps*(dt/1000);
+    // Process poison status
+    if (c.poison && now < c.poison.until) {
+      c.hp -= c.poison.dps * (dt / 1000);
+    } else if (c.poison && now >= c.poison.until) {
+      c.poison = null;
     }
-    else if (c.poison && now>=c.poison.until) {
-      c.poison=null;
-    }
 
-    if (c.hp<=0) {
-      logEvent(
-        `Creep #${c.id} died.`
-      );
-
+    if (c.hp <= 0) {
+      logEvent(`Creep #${c.id} died.`);
       continue;
     }
 
-    const slowed=
-      c.slowUntil>now;
+    const slowed = c.slowUntil > now;
+    const speed = BASE_CREEP_SPEED * GAME_SPEED * (slowed ? (1 - c.slowPct) : 1);
 
-    const speed=
-      BASE_CREEP_SPEED *
-      GAME_SPEED *
-      (
-        slowed
-          ? (1-c.slowPct)
-          : 1
-      );
+    let remaining = speed * (dt / 1000);
 
-    let remaining=
-      speed*(dt/1000);
+    while (remaining > 0 && c.segIndex < pathPixels.length - 1) {
+      const a = pathPixels[c.segIndex];
+      const b = pathPixels[c.segIndex + 1];
 
-    while (
-      remaining>0 &&
-      c.segIndex<pathPixels.length-1
-    ) {
-      const a=pathPixels[c.segIndex];
-      const b=pathPixels[c.segIndex+1];
+      const segDX = b.x - a.x;
+      const segDY = b.y - a.y;
 
-      const segDX=b.x-a.x;
-      const segDY=b.y-a.y;
+      const segLen = Math.hypot(segDX, segDY) || 1;
+      const remainingOnSeg = segLen * (1 - c.segT);
 
-      const segLen=
-        Math.hypot(segDX,segDY)||1;
-
-      const remainingOnSeg=
-        segLen*(1-c.segT);
-
-      if (remaining>=remainingOnSeg) {
-        remaining-=remainingOnSeg;
+      if (remaining >= remainingOnSeg) {
+        remaining -= remainingOnSeg;
         c.segIndex++;
-        c.segT=0;
-      }
-      else {
-        c.segT+=remaining/segLen;
-        remaining=0;
+        c.segT = 0;
+      } else {
+        c.segT += remaining / segLen;
+        remaining = 0;
       }
     }
 
-    if (c.segIndex>=pathPixels.length-1) {
-      const justEnded=loseLife();
+    if (c.segIndex >= pathPixels.length - 1) {
+      const justEnded = loseLife();
 
-      logEvent(
-        `Creep #${c.id} reached the exit. Lives: ${livesLeft}/${MAX_LIVES}.`
-      );
+      logEvent(`Creep #${c.id} reached the exit. Lives: ${livesLeft}/${MAX_LIVES}.`);
 
       if (justEnded) {
-        logEvent(
-          "— Game over: out of lives —"
-        );
+        logEvent("— Game over: out of lives —");
       }
 
       continue;
     }
 
-    const a=pathPixels[c.segIndex];
-    const b=pathPixels[
-      Math.min(
-        c.segIndex+1,
-        pathPixels.length-1
-      )
-    ];
+    const a = pathPixels[c.segIndex];
+    const b = pathPixels[Math.min(c.segIndex + 1, pathPixels.length - 1)];
 
-    c.x=
-      a.x+(b.x-a.x)*c.segT;
-
-    c.y=
-      a.y+(b.y-a.y)*c.segT;
+    c.x = a.x + (b.x - a.x) * c.segT;
+    c.y = a.y + (b.y - a.y) * c.segT;
 
     survivors.push(c);
   }
 
-  activeCreeps=survivors;
+  activeCreeps = survivors;
 }
 
 function creepProgress(c) {
-  return c.segIndex+c.segT;
+  return c.segIndex + c.segT;
 }
 
-function findTarget(px,py,range,exclude) {
-  let best=null;
-  let bestProgress=-1;
+function findTarget(px, py, range, exclude) {
+  let best = null;
+  let bestProgress = -1;
 
   for (const c of activeCreeps) {
     if (exclude && exclude.has(c.id)) {
       continue;
     }
 
-    const d=
-      Math.hypot(
-        c.x-px,
-        c.y-py
-      );
+    const d = Math.hypot(c.x - px, c.y - py);
 
-    if (d<=range) {
-      const p=creepProgress(c);
+    if (d <= range) {
+      const p = creepProgress(c);
 
-      if (p>bestProgress) {
-        bestProgress=p;
-        best=c;
+      if (p > bestProgress) {
+        bestProgress = p;
+        best = c;
       }
     }
   }
@@ -1706,82 +1195,44 @@ function findTarget(px,py,range,exclude) {
   return best;
 }
 
-function findTargets(
-  px,
-  py,
-  range,
-  maxTargets
-) {
-  const found=[];
+function findTargets(px, py, range, maxTargets) {
+  const found = [];
 
-  const candidates=
-    activeCreeps
-      .map(c => ({
-        c,
-        d:Math.hypot(
-          c.x-px,
-          c.y-py
-        )
-      }))
-      .filter(o => o.d<=range)
-      .sort(
-        (a,b) =>
-          creepProgress(b.c)-
-          creepProgress(a.c)
-      );
+  const candidates = activeCreeps
+    .map(c => ({
+      c,
+      d: Math.hypot(c.x - px, c.y - py)
+    }))
+    .filter(o => o.d <= range)
+    .sort((a, b) => creepProgress(b.c) - creepProgress(a.c));
 
   for (const o of candidates) {
-    if (found.length>=maxTargets) {
+    if (found.length >= maxTargets) {
       break;
     }
-
     found.push(o.c);
   }
 
   return found;
 }
 
-function applyDamage(creep,amount) {
-  creep.hp-=amount;
+function applyDamage(creep, amount) {
+  creep.hp -= amount;
 }
 
-function applySlow(
-  creep,
-  pct,
-  durMs,
-  now
-) {
-  if (
-    pct>=creep.slowPct ||
-    now>=creep.slowUntil
-  ) {
-    creep.slowPct=pct;
+function applySlow(creep, pct, durMs, now) {
+  if (pct >= creep.slowPct || now >= creep.slowUntil) {
+    creep.slowPct = pct;
   }
 
-  creep.slowUntil=
-    Math.max(
-      creep.slowUntil,
-      now+durMs
-    );
+  creep.slowUntil = Math.max(creep.slowUntil, now + durMs);
 }
 
-function applyPoison(
-  creep,
-  dps,
-  durMs,
-  now
-) {
-  const until=now+durMs;
+function applyPoison(creep, dps, durMs, now) {
+  const until = now + durMs;
 
-  if (
-    !creep.poison ||
-    dps>=creep.poison.dps ||
-    until>creep.poison.until
-  ) {
-    creep.poison={
-      dps,
-      until
-    };
+  if (!creep.poison || dps >= creep.poison.dps || until > creep.poison.until) {
+    creep.poison = { dps, until };
   }
 }
 
@@ -1792,9 +1243,7 @@ function pushEffect(effect) {
 function logEvent(text) {
   combatLogEntries.push(text);
 
-  if (
-    combatLogEntries.length>MAX_LOG
-  ) {
+  if (combatLogEntries.length > MAX_LOG) {
     combatLogEntries.shift();
   }
 
@@ -1802,329 +1251,217 @@ function logEvent(text) {
 }
 
 function renderLog() {
-  const el=$('log');
+  const el = $('log');
 
-  el.innerHTML=
-    combatLogEntries
-      .map(
-        t => `<li>${escapeHtml(t)}</li>`
-      )
-      .join('');
+  el.innerHTML = combatLogEntries
+    .map(t => `<li>${escapeHtml(t)}</li>`)
+    .join('');
 }
 
 function escapeHtml(s) {
   return s.replace(
     /[&<>"']/g,
     m => ({
-      '&':'&amp;',
-      '<':'&lt;',
-      '>':'&gt;',
-      '"':'&quot;',
-      "'":'&#39;'
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
     }[m])
   );
 }
 
 // ---------------------------------------------------------------------------
-// Attacks
+// Attacks & Tower Logic
 // ---------------------------------------------------------------------------
 
-function attackCreep(
-  gemPos,
-  gem,
-  target,
-  now,
-  opts
-) {
-  const {
-    stats,
-    colour,
-    name
-  }=getGemStats(gem);
+function attackCreep(gemPos, gem, target, now, opts) {
+  const { stats, colour, name } = getGemStats(gem);
 
-  const dmg=Math.round(
-    randRange(
-      stats.dmgMin,
-      stats.dmgMax
-    )
-  );
+  const dmg = Math.round(randRange(stats.dmgMin, stats.dmgMax));
 
-  applyDamage(
-    target,
-    dmg
-  );
+  applyDamage(target, dmg);
 
-  let note="";
+  let note = "";
 
   if (stats.poisonDps) {
-    applyPoison(
-      target,
-      stats.poisonDps,
-      stats.poisonDur,
-      now
-    );
-
-    note+=
-      ` (poison ${stats.poisonDps}/s)`;
+    applyPoison(target, stats.poisonDps, stats.poisonDur, now);
+    note += ` (poison ${stats.poisonDps}/s)`;
   }
 
   if (stats.slowPct) {
-    applySlow(
-      target,
-      stats.slowPct,
-      stats.slowDur,
-      now
-    );
-
-    note+=
-      ` (${Math.round(stats.slowPct*100)}% slow)`;
+    applySlow(target, stats.slowPct, stats.slowDur, now);
+    note += ` (${Math.round(stats.slowPct * 100)}% slow)`;
   }
 
-  if (
-    stats.splashRadius &&
-    !opts?.isSplashHit
-  ) {
-    const splashTargets=
-      activeCreeps.filter(
-        c =>
-          c!==target &&
-          Math.hypot(
-            c.x-target.x,
-            c.y-target.y
-          )<=stats.splashRadius
-      );
+  if (stats.splashRadius && !opts?.isSplashHit) {
+    const splashTargets = activeCreeps.filter(
+      c => c !== target && Math.hypot(c.x - target.x, c.y - target.y) <= stats.splashRadius
+    );
 
     for (const sc of splashTargets) {
-      attackCreep(
-        gemPos,
-        gem,
-        sc,
-        now,
-        {
-          isSplashHit:true,
-          silent:true
-        }
-      );
+      attackCreep(gemPos, gem, sc, now, {
+        isSplashHit: true,
+        silent: true
+      });
     }
 
     pushEffect({
-      kind:'splash',
-      x:target.x,
-      y:target.y,
-      radius:stats.splashRadius,
-      start:now,
-      life:260
+      kind: 'splash',
+      x: target.x,
+      y: target.y,
+      radius: stats.splashRadius,
+      start: now,
+      life: 260
     });
   }
 
   pushEffect({
-    kind:'projectile',
-    x1:gemPos.x,
-    y1:gemPos.y,
-    x2:target.x,
-    y2:target.y,
-    start:now,
-    life:130,
+    kind: 'projectile',
+    x1: gemPos.x,
+    y1: gemPos.y,
+    x2: target.x,
+    y2: target.y,
+    start: now,
+    life: 130,
     colour
   });
 
   pushEffect({
-    kind:'damageText',
-    x:target.x,
-    y:target.y,
-    text:`-${dmg}`,
-    start:now,
-    life:650
+    kind: 'damageText',
+    x: target.x,
+    y: target.y,
+    text: `-${dmg}`,
+    start: now,
+    life: 650
   });
 
   if (!opts?.silent) {
-    logEvent(
-      `${name} hit Creep #${target.id} for ${dmg}${note}`
-    );
+    logEvent(`${name} hit Creep #${target.id} for ${dmg}${note}`);
   }
 }
 
 function updateTowers(now) {
-  if (
-    gameOver ||
-    gems.size===0 ||
-    activeCreeps.length===0
-  ) {
+  if (gameOver || gems.size === 0 || activeCreeps.length === 0) {
     return;
   }
 
-  const auraSources=[];
+  const auraSources = [];
 
-  for (const [k,gem] of gems) {
-    const {
-      stats,
-      auraRadius
-    }=getGemStats(gem);
+  for (const [k, gem] of gems) {
+    const { stats, auraRadius } = getGemStats(gem);
 
     if (!stats.auraPct) {
       continue;
     }
 
-    const [gx,gy]=
-      k.split(',').map(Number);
+    const [gx, gy] = k.split(',').map(Number);
 
-    const pos={
-      x:(gx+.5)*cell,
-      y:(gy+.5)*cell
+    const pos = {
+      x: (gx + .5) * cell,
+      y: (gy + .5) * cell
     };
 
     auraSources.push({
       pos,
-      pct:stats.auraPct,
-      radius:auraRadius
+      pct: stats.auraPct,
+      radius: auraRadius
     });
   }
 
-  for (const [k,gem] of gems) {
-    const [gx,gy]=
-      k.split(',').map(Number);
+  for (const [k, gem] of gems) {
+    const [gx, gy] = k.split(',').map(Number);
 
-    const pos={
-      x:(gx+.5)*cell,
-      y:(gy+.5)*cell
+    const pos = {
+      x: (gx + .5) * cell,
+      y: (gy + .5) * cell
     };
 
-    const {stats}=
-      getGemStats(gem);
+    const { stats } = getGemStats(gem);
 
-    let auraBonus=0;
+    let auraBonus = 0;
 
     for (const o of auraSources) {
-      if (
-        Math.hypot(
-          o.pos.x-pos.x,
-          o.pos.y-pos.y
-        )<=o.radius
-      ) {
-        auraBonus+=o.pct;
+      if (Math.hypot(o.pos.x - pos.x, o.pos.y - pos.y) <= o.radius) {
+        auraBonus += o.pct;
       }
     }
 
-    const effectiveCooldown=
-      stats.cooldown /
-      (1+auraBonus) /
-      GAME_SPEED;
+    const effectiveCooldown = stats.cooldown / (1 + auraBonus) / GAME_SPEED;
 
-    if (
-      now-gem.lastAttack<
-      effectiveCooldown
-    ) {
+    if (now - gem.lastAttack < effectiveCooldown) {
       continue;
     }
 
     if (stats.maxTargets) {
-      const targets=findTargets(
-        pos.x,
-        pos.y,
-        stats.range,
-        stats.maxTargets
-      );
+      const targets = findTargets(pos.x, pos.y, stats.range, stats.maxTargets);
 
-      if (targets.length===0) {
+      if (targets.length === 0) {
         continue;
       }
 
       for (const t of targets) {
-        attackCreep(
-          pos,
-          gem,
-          t,
-          now
-        );
+        attackCreep(pos, gem, t, now);
       }
 
-      gem.lastAttack=now;
-    }
-    else {
-      const target=findTarget(
-        pos.x,
-        pos.y,
-        stats.range,
-        null
-      );
+      gem.lastAttack = now;
+    } else {
+      const target = findTarget(pos.x, pos.y, stats.range, null);
 
       if (!target) {
         continue;
       }
 
-      attackCreep(
-        pos,
-        gem,
-        target,
-        now
-      );
+      attackCreep(pos, gem, target, now);
 
-      gem.lastAttack=now;
+      gem.lastAttack = now;
     }
   }
 }
 
 function updateEffects(now) {
-  effects=
-    effects.filter(
-      e => now-e.start<e.life
-    );
+  effects = effects.filter(e => now - e.start < e.life);
 }
 
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
-function draw(now=performance.now()) {
-  ctx.clearRect(
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  );
+function draw(now = performance.now()) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  ctx.fillStyle='#d8d8d8';
+  ctx.fillStyle = '#d8d8d8';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  ctx.fillRect(
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  );
+  ctx.strokeStyle = '#c3c3c3';
+  ctx.lineWidth = 1;
 
-  ctx.strokeStyle='#c3c3c3';
-  ctx.lineWidth=1;
-
-  for (let i=0;i<=N;i++) {
+  for (let i = 0; i <= N; i++) {
     ctx.beginPath();
-    ctx.moveTo(i*cell,0);
-    ctx.lineTo(i*cell,canvas.height);
+    ctx.moveTo(i * cell, 0);
+    ctx.lineTo(i * cell, canvas.height);
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.moveTo(0,i*cell);
-    ctx.lineTo(canvas.width,i*cell);
+    ctx.moveTo(0, i * cell);
+    ctx.lineTo(canvas.width, i * cell);
     ctx.stroke();
   }
 
   if (path) {
-    ctx.strokeStyle='#9c9c9c';
-    ctx.lineWidth=cell*0.34;
-    ctx.lineCap='round';
-    ctx.lineJoin='round';
+    ctx.strokeStyle = '#9c9c9c';
+    ctx.lineWidth = cell * 0.34;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
 
     ctx.beginPath();
 
-    path.forEach(
-      (p,i) => {
-        const x=(p.x+.5)*cell;
-        const y=(p.y+.5)*cell;
+    path.forEach((p, i) => {
+      const x = (p.x + .5) * cell;
+      const y = (p.y + .5) * cell;
 
-        i
-          ? ctx.lineTo(x,y)
-          : ctx.moveTo(x,y);
-      }
-    );
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
 
     ctx.stroke();
   }
@@ -2134,306 +1471,130 @@ function draw(now=performance.now()) {
       continue;
     }
 
-    const [x,y]=
-      k.split(',').map(Number);
+    const [x, y] = k.split(',').map(Number);
 
-    ctx.fillStyle='#707070';
+    ctx.fillStyle = '#707070';
+    ctx.fillRect(x * cell + 2, y * cell + 2, cell - 4, cell - 4);
 
-    ctx.fillRect(
-      x*cell+2,
-      y*cell+2,
-      cell-4,
-      cell-4
-    );
-
-    ctx.strokeStyle='#4e4e4e';
-
-    ctx.strokeRect(
-      x*cell+2,
-      y*cell+2,
-      cell-4,
-      cell-4
-    );
+    ctx.strokeStyle = '#4e4e4e';
+    ctx.strokeRect(x * cell + 2, y * cell + 2, cell - 4, cell - 4);
   }
 
-  const sparkleKeys=
-    sparkleEligibleKeys();
+  const sparkleKeys = sparkleEligibleKeys();
 
-  for (const [k,g] of gems) {
-    const [x,y]=
-      k.split(',').map(Number);
+  for (const [k, g] of gems) {
+    const [x, y] = k.split(',').map(Number);
 
-    const cx=(x+.5)*cell;
-    const cy=(y+.5)*cell;
+    const cx = (x + .5) * cell;
+    const cy = (y + .5) * cell;
 
-    const isHovered=
-      hoveredGemKey===k;
+    const isHovered = hoveredGemKey === k;
+    const { colour, auraRadius } = getGemStats(g);
 
-    const {
-      colour,
-      auraRadius
-    }=getGemStats(g);
-
-    ctx.fillStyle=colour;
-
+    ctx.fillStyle = colour;
     ctx.beginPath();
-
-    ctx.arc(
-      cx,
-      cy,
-      cell*(isHovered?.36:.31),
-      0,
-      Math.PI*2
-    );
-
+    ctx.arc(cx, cy, cell * (isHovered ? .36 : .31), 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.strokeStyle=
-      isHovered
-        ? '#fff'
-        : '#222';
-
-    ctx.lineWidth=
-      isHovered
-        ? 2.5
-        : 2;
-
+    ctx.strokeStyle = isHovered ? '#fff' : '#222';
+    ctx.lineWidth = isHovered ? 2.5 : 2;
     ctx.stroke();
 
-    ctx.fillStyle='#111';
-    ctx.textAlign='center';
+    ctx.fillStyle = '#111';
+    ctx.textAlign = 'center';
 
     if (g.isCombo) {
-      ctx.font='bold 8px system-ui';
+      ctx.font = 'bold 8px system-ui';
+      ctx.fillText(COMBO_GEMS[g.type].short, cx, cy + 3);
+    } else {
+      ctx.font = 'bold 9px system-ui';
+      ctx.fillText(g.type[0], cx, cy + 3);
 
-      ctx.fillText(
-        COMBO_GEMS[g.type].short,
-        cx,
-        cy+3
-      );
-    }
-    else {
-      ctx.font='bold 9px system-ui';
-
-      ctx.fillText(
-        g.type[0],
-        cx,
-        cy+3
-      );
-
-      ctx.font='7px system-ui';
-
-      ctx.fillText(
-        g.level+1,
-        cx,
-        cy+11
-      );
+      ctx.font = '7px system-ui';
+      ctx.fillText(g.level + 1, cx, cy + 11);
     }
 
     if (auraRadius) {
-      ctx.strokeStyle=
-        'rgba(216,216,232,0.25)';
-
-      ctx.lineWidth=1;
-
+      ctx.strokeStyle = 'rgba(216,216,232,0.25)';
+      ctx.lineWidth = 1;
       ctx.beginPath();
-
-      ctx.arc(
-        cx,
-        cy,
-        auraRadius,
-        0,
-        Math.PI*2
-      );
-
+      ctx.arc(cx, cy, auraRadius, 0, Math.PI * 2);
       ctx.stroke();
     }
 
     if (sparkleKeys.has(k)) {
-      drawSparkle(
-        cx,
-        cy,
-        now
-      );
+      drawSparkle(cx, cy, now);
     }
   }
 
-  points.forEach((p,i) => {
-    const cx=(p.x+.5)*cell;
-    const cy=(p.y+.5)*cell;
+  points.forEach((p, i) => {
+    const cx = (p.x + .5) * cell;
+    const cy = (p.y + .5) * cell;
 
-    if (i===0) {
-      ctx.fillStyle='#4c8';
-
+    if (i === 0) {
+      ctx.fillStyle = '#4c8';
       ctx.beginPath();
-
-      ctx.arc(
-        cx,
-        cy,
-        cell*.28,
-        0,
-        Math.PI*2
-      );
-
+      ctx.arc(cx, cy, cell * .28, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle='#173';
-      ctx.font='bold 12px system-ui';
-      ctx.textAlign='center';
+      ctx.fillStyle = '#173';
+      ctx.font = 'bold 12px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('IN', cx, cy + 4);
+    } else if (i === points.length - 1) {
+      ctx.fillStyle = '#c65';
+      ctx.fillRect(cx - cell * .25, cy - cell * .25, cell * .5, cell * .5);
 
-      ctx.fillText(
-        'IN',
-        cx,
-        cy+4
-      );
-    }
-    else if (i===points.length-1) {
-      ctx.fillStyle='#c65';
-
-      ctx.fillRect(
-        cx-cell*.25,
-        cy-cell*.25,
-        cell*.5,
-        cell*.5
-      );
-
-      ctx.fillStyle='#512';
-      ctx.font='bold 11px system-ui';
-      ctx.textAlign='center';
-
-      ctx.fillText(
-        'OUT',
-        cx,
-        cy+4
-      );
-    }
-    else {
-      ctx.fillStyle='#e0b84e';
-
+      ctx.fillStyle = '#512';
+      ctx.font = 'bold 11px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('OUT', cx, cy + 4);
+    } else {
+      ctx.fillStyle = '#e0b84e';
       ctx.beginPath();
-
-      ctx.moveTo(
-        cx,
-        cy-cell*.28
-      );
-
-      ctx.lineTo(
-        cx+cell*.28,
-        cy
-      );
-
-      ctx.lineTo(
-        cx,
-        cy+cell*.28
-      );
-
-      ctx.lineTo(
-        cx-cell*.28,
-        cy
-      );
-
+      ctx.moveTo(cx, cy - cell * .28);
+      ctx.lineTo(cx + cell * .28, cy);
+      ctx.lineTo(cx, cy + cell * .28);
+      ctx.lineTo(cx - cell * .28, cy);
       ctx.closePath();
       ctx.fill();
 
-      ctx.fillStyle='#4a3a10';
-      ctx.font='bold 11px system-ui';
-      ctx.textAlign='center';
-
-      ctx.fillText(
-        i,
-        cx,
-        cy+4
-      );
+      ctx.fillStyle = '#4a3a10';
+      ctx.font = 'bold 11px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(i, cx, cy + 4);
     }
   });
 
-  // Creeps
+  // Render Creeps
   for (const c of activeCreeps) {
-    const slowed=
-      c.slowUntil>now;
+    const slowed = c.slowUntil > now;
+    const poisoned = !!c.poison;
 
-    const poisoned=
-      !!c.poison;
-
-    ctx.fillStyle=
-      poisoned
-        ? '#3f8f4f'
-        : slowed
-          ? '#3f6f9f'
-          : '#222';
-
+    ctx.fillStyle = poisoned ? '#3f8f4f' : slowed ? '#3f6f9f' : '#222';
     ctx.beginPath();
-
-    ctx.arc(
-      c.x,
-      c.y,
-      cell*.2,
-      0,
-      Math.PI*2
-    );
-
+    ctx.arc(c.x, c.y, cell * .2, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle='#fff';
-
+    ctx.fillStyle = '#fff';
     ctx.beginPath();
-
-    ctx.arc(
-      c.x,
-      c.y,
-      cell*.08,
-      0,
-      Math.PI*2
-    );
-
+    ctx.arc(c.x, c.y, cell * .08, 0, Math.PI * 2);
     ctx.fill();
 
-    const barW=cell*.5;
-    const barH=4;
+    const barW = cell * .5;
+    const barH = 4;
+    const bx = c.x - barW / 2;
+    const by = c.y - cell * .36;
 
-    const bx=
-      c.x-barW/2;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);
 
-    const by=
-      c.y-cell*.36;
+    ctx.fillStyle = '#444';
+    ctx.fillRect(bx, by, barW, barH);
 
-    ctx.fillStyle='#000';
-
-    ctx.fillRect(
-      bx-1,
-      by-1,
-      barW+2,
-      barH+2
-    );
-
-    ctx.fillStyle='#444';
-
-    ctx.fillRect(
-      bx,
-      by,
-      barW,
-      barH
-    );
-
-    const pct=
-      Math.max(
-        0,
-        c.hp/c.maxHp
-      );
-
-    ctx.fillStyle=
-      pct>0.5
-        ? '#4caf50'
-        : pct>0.25
-          ? '#e0a53f'
-          : '#e05c5c';
-
-    ctx.fillRect(
-      bx,
-      by,
-      barW*pct,
-      barH
-    );
+    const pct = Math.max(0, c.hp / c.maxHp);
+    ctx.fillStyle = pct > 0.5 ? '#4caf50' : pct > 0.25 ? '#e0a53f' : '#e05c5c';
+    ctx.fillRect(bx, by, barW * pct, barH);
   }
 
   drawCombatEffects(now);
@@ -2441,241 +1602,95 @@ function draw(now=performance.now()) {
 
 function drawCombatEffects(now) {
   for (const e of effects) {
-    const t=
-      (now-e.start)/e.life;
+    const t = (now - e.start) / e.life;
 
-    if (e.kind==='projectile') {
-      const x=
-        e.x1+
-        (e.x2-e.x1)*
-        Math.min(1,t*1.4);
+    if (e.kind === 'projectile') {
+      const x = e.x1 + (e.x2 - e.x1) * Math.min(1, t * 1.4);
+      const y = e.y1 + (e.y2 - e.y1) * Math.min(1, t * 1.4);
 
-      const y=
-        e.y1+
-        (e.y2-e.y1)*
-        Math.min(1,t*1.4);
-
-      ctx.strokeStyle=e.colour;
-      ctx.globalAlpha=1-t;
-      ctx.lineWidth=2;
+      ctx.strokeStyle = e.colour;
+      ctx.globalAlpha = 1 - t;
+      ctx.lineWidth = 2;
 
       ctx.beginPath();
-
-      ctx.moveTo(
-        e.x1,
-        e.y1
-      );
-
-      ctx.lineTo(
-        x,
-        y
-      );
-
+      ctx.moveTo(e.x1, e.y1);
+      ctx.lineTo(x, y);
       ctx.stroke();
 
-      ctx.fillStyle=e.colour;
-
+      ctx.fillStyle = e.colour;
       ctx.beginPath();
-
-      ctx.arc(
-        x,
-        y,
-        3,
-        0,
-        Math.PI*2
-      );
-
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.globalAlpha=1;
-    }
-    else if (e.kind==='splash') {
-      ctx.strokeStyle=
-        `rgba(231,76,60,${1-t})`;
-
-      ctx.lineWidth=2;
+      ctx.globalAlpha = 1;
+    } else if (e.kind === 'splash') {
+      ctx.strokeStyle = `rgba(231,76,60,${1 - t})`;
+      ctx.lineWidth = 2;
 
       ctx.beginPath();
-
-      ctx.arc(
-        e.x,
-        e.y,
-        e.radius*(0.4+t*0.6),
-        0,
-        Math.PI*2
-      );
-
+      ctx.arc(e.x, e.y, e.radius * (0.4 + t * 0.6), 0, Math.PI * 2);
       ctx.stroke();
-    }
-    else if (e.kind==='damageText') {
-      ctx.globalAlpha=1-t;
-      ctx.fillStyle='#fff';
-
-      ctx.font=
-        'bold 11px system-ui';
-
-      ctx.textAlign='center';
-
-      ctx.fillText(
-        e.text,
-        e.x,
-        e.y-cell*.35-t*14
-      );
-
-      ctx.globalAlpha=1;
+    } else if (e.kind === 'damageText') {
+      ctx.globalAlpha = 1 - t;
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 11px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(e.text, e.x, e.y - cell * .35 - t * 14);
+      ctx.globalAlpha = 1;
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Board Combination & Gem Stat Helpers
-// ---------------------------------------------------------------------------
-
-function getGemStats(gem) {
-  if (gem.isCombo) {
-    const def = COMBO_GEMS[gem.type];
-    return {
-      name: gem.type,
-      color: def.colour,
-      role: def.role,
-      stats: def.stats
-    };
-  }
-  const quality = GEM_LEVELS[gem.level];
-  const def = GEM_TYPES[gem.type];
-  return {
-    name: `${quality} ${gem.type}`,
-    color: def.colour,
-    role: def.role,
-    stats: def.levels[gem.level]
-  };
-}
-
-function findIngredientsForCombo(combo, targetGemKey) {
-  const counts = new Map();
-  const gemList = [];
-
-  for (const [k, g] of gems) {
-    if (g.isCombo) continue;
-    const label = `${GEM_LEVELS[g.level]} ${g.type}`;
-    if (!counts.has(label)) counts.set(label, []);
-    counts.get(label).push(k);
-  }
-
-  const targetGem = gems.get(targetGemKey);
-  if (!targetGem || targetGem.isCombo) return null;
-
-  const targetLabel = `${GEM_LEVELS[targetGem.level]} ${targetGem.type}`;
-  const matchedKeys = [];
-
-  for (const req of combo.requires) {
-    const label = `${req.q} ${req.t}`;
-    const available = counts.get(label) || [];
-    if (available.length === 0) return null;
-    
-    // Take a key from available
-    const keyToUse = available.pop();
-    matchedKeys.push(keyToUse);
-  }
-
-  // Ensure target gem is actually involved in this combination match
-  if (!matchedKeys.includes(targetGemKey)) return null;
-
-  return matchedKeys;
-}
-
-function combineBoardGem(comboName, targetGemKey) {
-  const combo = COMBINATIONS.find(c => c.name === comboName);
-  if (!combo) return;
-
-  const ingKeys = findIngredientsForCombo(combo, targetGemKey);
-  if (!ingKeys) {
-    setMessage("Combination ingredients are no longer available.");
-    return;
-  }
-
-  // Remove used gems, keep the target gem location for the combo tower
-  ingKeys.forEach(k => {
-    if (k !== targetGemKey) {
-      gems.delete(k);
-    }
-  });
-
-  gems.set(targetGemKey, {
-    key: targetGemKey,
-    type: combo.name,
-    level: 0,
-    isCombo: true,
-    lastFired: 0
-  });
-
-  selectedGem = gems.get(targetGemKey);
-  setMessage(`Successfully created ${combo.name}!`);
-  updateStats();
-}
-
-// ---------------------------------------------------------------------------
-// Combination availability / sparkle
+// Combination Availability & Visual Sparkles
 // ---------------------------------------------------------------------------
 
 function boardCounts() {
-  const counts=new Map();
+  const counts = new Map();
 
   for (const g of gems.values()) {
     if (g.isCombo) {
       continue;
     }
 
-    const kk=
-      `${GEM_LEVELS[g.level]} ${g.type}`;
-
-    counts.set(
-      kk,
-      (counts.get(kk)||0)+1
-    );
+    const kk = `${GEM_LEVELS[g.level]} ${g.type}`;
+    counts.set(kk, (counts.get(kk) || 0) + 1);
   }
 
   return counts;
 }
 
 function satisfiedCombosOnBoard() {
-  const counts=boardCounts();
+  const counts = boardCounts();
 
   return COMBINATIONS.filter(
-    c => comboAvailability(c,counts).allOk
+    c => comboAvailability(c, counts).allOk
   );
 }
 
 function sparkleEligibleKeys() {
-  const satisfied=
-    satisfiedCombosOnBoard();
+  const satisfied = satisfiedCombosOnBoard();
 
   if (!satisfied.length) {
     return new Set();
   }
 
-  const neededLabels=new Set();
+  const neededLabels = new Set();
 
   for (const c of satisfied) {
     for (const r of c.requires) {
-      neededLabels.add(
-        `${r.q} ${r.t}`
-      );
+      neededLabels.add(`${r.q} ${r.t}`);
     }
   }
 
-  const keys=new Set();
+  const keys = new Set();
 
-  for (const [k,g] of gems) {
+  for (const [k, g] of gems) {
     if (g.isCombo) {
       continue;
     }
 
-    if (
-      neededLabels.has(
-        `${GEM_LEVELS[g.level]} ${g.type}`
-      )
-    ) {
+    if (neededLabels.has(`${GEM_LEVELS[g.level]} ${g.type}`)) {
       keys.add(k);
     }
   }
@@ -2683,81 +1698,34 @@ function sparkleEligibleKeys() {
   return keys;
 }
 
-function drawSparkle(
-  cx,
-  cy,
-  now
-) {
-  const t=now/1000;
+function drawSparkle(cx, cy, now) {
+  const t = now / 1000;
 
   ctx.save();
-
-  ctx.globalAlpha=
-    0.55+
-    0.35*Math.sin(t*4);
-
-  ctx.strokeStyle='#ffd75e';
-  ctx.lineWidth=1.5;
+  ctx.globalAlpha = 0.55 + 0.35 * Math.sin(t * 4);
+  ctx.strokeStyle = '#ffd75e';
+  ctx.lineWidth = 1.5;
 
   ctx.beginPath();
-
-  ctx.arc(
-    cx,
-    cy,
-    cell*.42+
-      2*Math.sin(t*3),
-    0,
-    Math.PI*2
-  );
-
+  ctx.arc(cx, cy, cell * .42 + 2 * Math.sin(t * 3), 0, Math.PI * 2);
   ctx.stroke();
 
-  for (let i=0;i<3;i++) {
-    const angle=
-      t*1.2+
-      i*(Math.PI*2/3);
+  for (let i = 0; i < 3; i++) {
+    const angle = t * 1.2 + i * (Math.PI * 2 / 3);
+    const r = cell * .5;
 
-    const r=cell*.5;
+    const sx = cx + Math.cos(angle) * r;
+    const sy = cy + Math.sin(angle) * r;
 
-    const sx=
-      cx+
-      Math.cos(angle)*r;
-
-    const sy=
-      cy+
-      Math.sin(angle)*r;
-
-    ctx.globalAlpha=
-      0.4+
-      0.6*Math.abs(
-        Math.sin(t*5+i)
-      );
-
-    ctx.strokeStyle='#fff6c8';
-    ctx.lineWidth=1;
+    ctx.globalAlpha = 0.4 + 0.6 * Math.abs(Math.sin(t * 5 + i));
+    ctx.strokeStyle = '#fff6c8';
+    ctx.lineWidth = 1;
 
     ctx.beginPath();
-
-    ctx.moveTo(
-      sx-3,
-      sy
-    );
-
-    ctx.lineTo(
-      sx+3,
-      sy
-    );
-
-    ctx.moveTo(
-      sx,
-      sy-3
-    );
-
-    ctx.lineTo(
-      sx,
-      sy+3
-    );
-
+    ctx.moveTo(sx - 3, sy);
+    ctx.lineTo(sx + 3, sy);
+    ctx.moveTo(sx, sy - 3);
+    ctx.lineTo(sx, sy + 3);
     ctx.stroke();
   }
 
@@ -2765,7 +1733,7 @@ function drawSparkle(
 }
 
 // ---------------------------------------------------------------------------
-// Gem choice panel
+// Gem Choice Panel
 // ---------------------------------------------------------------------------
 
 function renderGemChoicePanel() {
@@ -2777,7 +1745,14 @@ function renderGemChoicePanel() {
   }
 
   panel.style.display = 'block';
-  const { options, comboMatch } = pendingGemChoice;
+  panel.innerHTML = '';
+
+  const { options, comboMatch, stoneKey } = pendingGemChoice;
+
+  // Header
+  const title = document.createElement('h2');
+  title.textContent = `Select a Gem for tile ${stoneKey}`;
+  panel.appendChild(title);
 
   // 1. Check for duplicates in the 3 rolled options
   const counts = {};
@@ -2787,180 +1762,143 @@ function renderGemChoicePanel() {
     counts[k].push(idx);
   });
 
-  let duplicateUpgradesHtml = '';
+  // 2. Render standard 3 choices
+  options.forEach((opt, idx) => {
+    const def = GEM_TYPES[opt.type];
+    const lvlName = GEM_LEVELS[opt.level];
+
+    const btn = document.createElement('button');
+    btn.className = 'gem-choice-card';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'gem-choice-name';
+    nameSpan.textContent = `${lvlName} ${opt.type}`;
+
+    const roleSpan = document.createElement('span');
+    roleSpan.className = 'gem-choice-role';
+    roleSpan.textContent = def.role;
+
+    const statsSpan = document.createElement('span');
+    statsSpan.className = 'gem-choice-stats';
+    statsSpan.textContent = `Dmg: ${def.levels[opt.level].dmgMin}-${def.levels[opt.level].dmgMax} | Range: ${def.levels[opt.level].range}`;
+
+    btn.appendChild(nameSpan);
+    btn.appendChild(roleSpan);
+    btn.appendChild(statsSpan);
+
+    btn.addEventListener('click', () => chooseGem(idx));
+    panel.appendChild(btn);
+  });
+
+  // 3. Append Duplicate Upgrade card if eligible
   Object.keys(counts).forEach(k => {
     const indices = counts[k];
     if (indices.length >= 2) {
       const sample = options[indices[0]];
       if (sample.level < GEM_LEVELS.length - 1) {
         const nextLevelName = GEM_LEVELS[sample.level + 1];
-        duplicateUpgradesHtml += `
-          <button class="gem-choice-card" style="border-color:#4a90e2;" onclick="chooseDuplicateUpgrade('${sample.type}', ${sample.level + 1})">
-            <span class="gem-choice-name">Combine Pair ➔ ${nextLevelName} ${sample.type}</span>
-            <span class="gem-choice-role">Combine two identical ${GEM_LEVELS[sample.level]} gems into the next tier.</span>
-          </button>
-        `;
+
+        const dupBtn = document.createElement('button');
+        dupBtn.className = 'gem-choice-card';
+        dupBtn.style.borderColor = '#4a90e2';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'gem-choice-name';
+        nameSpan.textContent = `Combine Pair ➔ ${nextLevelName} ${sample.type}`;
+
+        const roleSpan = document.createElement('span');
+        roleSpan.className = 'gem-choice-role';
+        roleSpan.textContent = `Combine two identical ${GEM_LEVELS[sample.level]} gems into the next tier.`;
+
+        dupBtn.appendChild(nameSpan);
+        dupBtn.appendChild(roleSpan);
+
+        dupBtn.addEventListener('click', () => chooseDuplicateUpgrade(sample.type, sample.level + 1));
+        panel.appendChild(dupBtn);
       }
     }
   });
 
-  // 2. Render standard 3 choices
-  let html = `<h2>Select a Gem for tile ${pendingGemChoice.stoneKey}</h2>`;
-
-  options.forEach((opt, idx) => {
-    const def = GEM_TYPES[opt.type];
-    const lvlName = GEM_LEVELS[opt.level];
-    html += `
-      <button class="gem-choice-card" onclick="chooseGem(${idx})">
-        <span class="gem-choice-name">${lvlName} ${opt.type}</span>
-        <span class="gem-choice-role">${def.role}</span>
-        <span class="gem-choice-stats">Dmg: ${def.levels[opt.level].dmgMin}-${def.levels[opt.level].dmgMax} | Range: ${def.levels[opt.level].range}</span>
-      </button>
-    `;
-  });
-
-  // 3. Append Duplicate Upgrade card if eligible
-  html += duplicateUpgradesHtml;
-
   // 4. Append 4th "Combine All 3" Option if combo recipe matches
   if (comboMatch) {
-    html += `
-      <button class="gem-choice-card combo-offer" onclick="chooseComboGem()">
-        <span class="gem-choice-name" style="color:#e8cbd2;">✨ Combine All ➔ ${comboMatch}</span>
-        <span class="gem-choice-role">Combine all 3 rolled gems into a special recipe gem!</span>
-      </button>
-    `;
-  }
+    const comboBtn = document.createElement('button');
+    comboBtn.className = 'gem-choice-card combo-offer';
 
-  panel.innerHTML = html;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'gem-choice-name';
+    nameSpan.style.color = '#e8cbd2';
+    nameSpan.textContent = `✨ Combine All ➔ ${comboMatch}`;
+
+    const roleSpan = document.createElement('span');
+    roleSpan.className = 'gem-choice-role';
+    roleSpan.textContent = 'Combine all 3 rolled gems into a special recipe gem!';
+
+    comboBtn.appendChild(nameSpan);
+    comboBtn.appendChild(roleSpan);
+
+    comboBtn.addEventListener('click', () => chooseComboGem());
+    panel.appendChild(comboBtn);
+  }
 }
 
 function statLinesFromStats(s) {
-  const dmg=
-    s.dmgMin===s.dmgMax
-      ? `${s.dmgMin}`
-      : `${s.dmgMin}-${s.dmgMax}`;
+  const dmg = s.dmgMin === s.dmgMax ? `${s.dmgMin}` : `${s.dmgMin}-${s.dmgMax}`;
 
-  const parts=[
+  const parts = [
     `Damage ${dmg}`,
     `Cooldown ${s.cooldown}ms`,
     `Range ${s.range}`
   ];
 
-  if (s.trueDamage) {
-    parts.push(
-      'True damage'
-    );
-  }
-
-  if (s.splashRadius) {
-    parts.push(
-      `Splash ${s.splashRadius}`
-    );
-  }
-
-  if (s.maxTargets) {
-    parts.push(
-      `Up to ${s.maxTargets} targets`
-    );
-  }
-
-  if (s.slowPct) {
-    parts.push(
-      `${Math.round(s.slowPct*100)}% slow / ${(s.slowDur/1000)}s`
-    );
-  }
-
-  if (s.poisonDps) {
-    parts.push(
-      `Poison ${s.poisonDps}/s / ${(s.poisonDur/1000)}s`
-    );
-  }
-
-  if (s.auraPct) {
-    parts.push(
-      `+${Math.round(s.auraPct*100)}% attack speed aura`
-    );
-  }
+  if (s.trueDamage) parts.push('True damage');
+  if (s.splashRadius) parts.push(`Splash ${s.splashRadius}`);
+  if (s.maxTargets) parts.push(`Up to ${s.maxTargets} targets`);
+  if (s.slowPct) parts.push(`${Math.round(s.slowPct * 100)}% slow / ${s.slowDur / 1000}s`);
+  if (s.poisonDps) parts.push(`Poison ${s.poisonDps}/s / ${s.poisonDur / 1000}s`);
+  if (s.auraPct) parts.push(`+${Math.round(s.auraPct * 100)}% attack speed aura`);
 
   return parts;
 }
 
-function statsLine(
-  type,
-  level
-) {
-  return statLinesFromStats(
-    GEM_TYPES[type].levels[level]
+function statsLine(type, level) {
+  return statLinesFromStats(GEM_TYPES[type].levels[level]);
+}
+
+function relevantCombos(type, quality) {
+  return COMBINATIONS.filter(c =>
+    c.requires.some(r => r.t === type && r.q === quality)
   );
 }
 
-function relevantCombos(
-  type,
-  quality
-) {
-  return COMBINATIONS.filter(
-    c =>
-      c.requires.some(
-        r =>
-          r.t===type &&
-          r.q===quality
-      )
-  );
-}
-
-function comboAvailability(
-  combo,
-  counts
-) {
-  const need=new Map();
+function comboAvailability(combo, counts) {
+  const need = new Map();
 
   for (const r of combo.requires) {
-    const kk=
-      `${r.q} ${r.t}`;
-
-    need.set(
-      kk,
-      (need.get(kk)||0)+1
-    );
+    const kk = `${r.q} ${r.t}`;
+    need.set(kk, (need.get(kk) || 0) + 1);
   }
 
-  const rows=[];
-  let allOk=true;
+  const rows = [];
+  let allOk = true;
 
-  for (const [kk,n] of need) {
-    const have=
-      counts.get(kk)||0;
+  for (const [kk, n] of need) {
+    const have = counts.get(kk) || 0;
+    const ok = have >= n;
 
-    const ok=
-      have>=n;
+    if (!ok) allOk = false;
 
-    if (!ok) {
-      allOk=false;
-    }
-
-    rows.push({
-      label:kk,
-      ok
-    });
+    rows.push({ label: kk, ok });
   }
 
-  return {
-    allOk,
-    rows
-  };
+  return { allOk, rows };
 }
 
 // ---------------------------------------------------------------------------
 // Tooltip
 // ---------------------------------------------------------------------------
 
-function showTooltip(
-  clientX,
-  clientY,
-  gemKey
-) {
-  const g=gems.get(gemKey);
+function showTooltip(clientX, clientY, gemKey) {
+  const g = gems.get(gemKey);
 
   if (!g) {
     hideTooltip();
@@ -2970,236 +1908,127 @@ function showTooltip(
   let html;
 
   if (g.isCombo) {
-    const def=
-      COMBO_GEMS[g.type];
+    const def = COMBO_GEMS[g.type];
 
-    html=
-      `<h3 style="color:${def.colour}">&#10024; ${g.type}</h3>`;
-
-    html+=
-      `<div class="stats-line" style="color:#999">${def.role}</div>`;
-
-    html+=
-      statLinesFromStats(
-        def.stats
-      )
-      .map(
-        l =>
-          `<div class="stats-line">${l}</div>`
-      )
+    html = `<h3 style="color:${def.colour}">&#10024; ${g.type}</h3>`;
+    html += `<div class="stats-line" style="color:#999">${def.role}</div>`;
+    html += statLinesFromStats(def.stats)
+      .map(l => `<div class="stats-line">${l}</div>`)
       .join('');
 
-    html+=
-      `<div class="section-title">Combination options</div>
-       <div class="stats-line" style="color:#777">
-         Already a combined tower - not part of further recipes.
-       </div>`;
-  }
-  else {
-    const quality=
-      GEM_LEVELS[g.level];
+    html += `<div class="section-title">Combination options</div>
+             <div class="stats-line" style="color:#777">
+               Already a combined tower - not part of further recipes.
+             </div>`;
+  } else {
+    const quality = GEM_LEVELS[g.level];
+    const counts = boardCounts();
+    const combos = relevantCombos(g.type, quality);
 
-    const counts=
-      boardCounts();
-
-    const combos=
-      relevantCombos(
-        g.type,
-        quality
-      );
-
-    html=
-      `<h3 style="color:${GEM_TYPES[g.type].colour}">${quality} ${g.type}</h3>`;
-
-    html+=
-      `<div class="stats-line" style="color:#999">${GEM_TYPES[g.type].role}</div>`;
-
-    html+=
-      statsLine(
-        g.type,
-        g.level
-      )
-      .map(
-        l =>
-          `<div class="stats-line">${l}</div>`
-      )
+    html = `<h3 style="color:${GEM_TYPES[g.type].colour}">${quality} ${g.type}</h3>`;
+    html += `<div class="stats-line" style="color:#999">${GEM_TYPES[g.type].role}</div>`;
+    html += statsLine(g.type, g.level)
+      .map(l => `<div class="stats-line">${l}</div>`)
       .join('');
 
     if (combos.length) {
-      html+=
-        `<div class="section-title">Combination options</div>`;
+      html += `<div class="section-title">Combination options</div>`;
 
       for (const c of combos) {
-        const {
-          allOk,
-          rows
-        }=
-          comboAvailability(
-            c,
-            counts
-          );
+        const { allOk, rows } = comboAvailability(c, counts);
 
-        html+=
-          `<div class="combo">
-            <span class="combo-name">${c.name}</span>
-            ${
-              allOk
-                ? '<span class="ok">&#10003; Available</span>'
-                : '<span class="miss">&#10007; Not yet</span>'
-            }`;
+        html += `<div class="combo">
+                   <span class="combo-name">${c.name}</span>
+                   ${allOk ? '<span class="ok">&#10003; Available</span>' : '<span class="miss">&#10007; Not yet</span>'}`;
 
-        html+=
-          rows
-            .map(
-              r =>
-                `<span class="ing ${r.ok?'ok':'miss'}">${r.ok?'\u2713':'\u2715'} ${r.label}</span>`
-            )
-            .join('');
+        html += rows
+          .map(r => `<span class="ing ${r.ok ? 'ok' : 'miss'}">${r.ok ? '\u2713' : '\u2715'} ${r.label}</span>`)
+          .join('');
 
-        html+=
-          `</div>`;
+        html += `</div>`;
       }
-    }
-    else {
-      html+=
-        `<div class="section-title">Combination options</div>
-         <div class="stats-line" style="color:#777">
-           ${quality} ${g.type} isn't an ingredient in any recipe. See all recipes.
-         </div>`;
+    } else {
+      html += `<div class="section-title">Combination options</div>
+               <div class="stats-line" style="color:#777">
+                 ${quality} ${g.type} isn't an ingredient in any recipe. See all recipes.
+               </div>`;
     }
   }
 
-  const tip=
-    $('tooltip');
+  const tip = $('tooltip');
 
-  tip.innerHTML=html;
-  tip.style.display='block';
+  tip.innerHTML = html;
+  tip.style.display = 'block';
 
-  const appRect=
-    document
-      .querySelector('.app')
-      .getBoundingClientRect();
+  const appRect = document.querySelector('.app').getBoundingClientRect();
 
-  let left=
-    clientX-
-    appRect.left+
-    16;
+  let left = clientX - appRect.left + 16;
+  let top = clientY - appRect.top + 16;
 
-  let top=
-    clientY-
-    appRect.top+
-    16;
-
-  if (
-    left+260>
-    appRect.width
-  ) {
-    left=
-      clientX-
-      appRect.left-
-      266;
+  if (left + 260 > appRect.width) {
+    left = clientX - appRect.left - 266;
   }
 
-  tip.style.left=
-    `${left}px`;
-
-  tip.style.top=
-    `${top}px`;
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
 }
 
 function hideTooltip() {
-  hoveredGemKey=null;
-  $('tooltip').style.display='none';
+  hoveredGemKey = null;
+  $('tooltip').style.display = 'none';
 }
 
 // ---------------------------------------------------------------------------
-// Recipes modal
+// Recipes Modal
 // ---------------------------------------------------------------------------
 
-let recipesOpen=false;
+let recipesOpen = false;
 
 function renderRecipesPanel() {
-  const counts=
-    boardCounts();
+  const counts = boardCounts();
 
-  const html=
-    COMBINATIONS
-      .map(c => {
-        const {
-          allOk,
-          rows
-        }=
-          comboAvailability(
-            c,
-            counts
-          );
+  const html = COMBINATIONS
+    .map(c => {
+      const { allOk, rows } = comboAvailability(c, counts);
+      const upgrade = COMBO_UPGRADES[c.name];
 
-        const upgrade=
-          COMBO_UPGRADES[c.name];
-
-        return `
-          <div class="recipe-row">
-            <div class="recipe-head">
-              <span class="combo-name">${c.name}</span>
-              ${
-                allOk
-                  ? '<span class="ok">&#10003; Available</span>'
-                  : '<span class="miss">&#10007; Not yet</span>'
-              }
-            </div>
-
-            <div class="recipe-ings">
-              ${
-                rows
-                  .map(
-                    r =>
-                      `<span class="ing ${r.ok?'ok':'miss'}">${r.ok?'\u2713':'\u2715'} ${r.label}</span>`
-                  )
-                  .join('')
-              }
-            </div>
-
-            ${
-              upgrade
-                ? `<div class="recipe-upgrade">
-                    Upgrade: ${upgrade.name}
-                    ${upgrade.cost ? ` (${upgrade.cost}g)` : ''}
-                    — ${upgrade.effect}
-                  </div>`
-                : ''
-            }
+      return `
+        <div class="recipe-row">
+          <div class="recipe-head">
+            <span class="combo-name">${c.name}</span>
+            ${allOk ? '<span class="ok">&#10003; Available</span>' : '<span class="miss">&#10007; Not yet</span>'}
           </div>
-        `;
-      })
-      .join('');
 
-  $('recipesList').innerHTML=html;
+          <div class="recipe-ings">
+            ${rows.map(r => `<span class="ing ${r.ok ? 'ok' : 'miss'}">${r.ok ? '\u2713' : '\u2715'} ${r.label}</span>`).join('')}
+          </div>
+
+          ${upgrade ? `<div class="recipe-upgrade">
+                          Upgrade: ${upgrade.name}
+                          ${upgrade.cost ? ` (${upgrade.cost}g)` : ''}
+                          — ${upgrade.effect}
+                        </div>` : ''}
+        </div>
+      `;
+    })
+    .join('');
+
+  $('recipesList').innerHTML = html;
 }
 
 function openRecipes() {
-  recipesOpen=true;
-
-  $('recipesModal')
-    .classList
-    .add('open');
-
+  recipesOpen = true;
+  $('recipesModal').classList.add('open');
   renderRecipesPanel();
 }
 
 function closeRecipes() {
-  recipesOpen=false;
-
-  $('recipesModal')
-    .classList
-    .remove('open');
+  recipesOpen = false;
+  $('recipesModal').classList.remove('open');
 }
 
 // ---------------------------------------------------------------------------
-// UI
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// UI
+// UI & Stats Update
 // ---------------------------------------------------------------------------
 
 function updateStats() {
@@ -3234,14 +2063,24 @@ function updateStats() {
   $('startRound').disabled = gameOver || roundActive || !!pendingGemChoice;
   $('difficulty').disabled = roundActive;
 
+  const gemInfoEl = $('gemInfo');
+  gemInfoEl.innerHTML = '';
+
   if (selectedGem) {
     const info = getGemStats(selectedGem);
-    let extraActionHtml = '';
+
+    const titleSpan = document.createElement('span');
+    titleSpan.innerHTML = `<b>${info.name}</b> (${selectedGem.key})`;
+    gemInfoEl.appendChild(titleSpan);
 
     // Action: Downgrade button
     if (!selectedGem.isCombo && selectedGem.level > 0) {
       const lowerQuality = GEM_LEVELS[selectedGem.level - 1];
-      extraActionHtml += ` <button style="margin-left:8px; background:#e65100; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;" onclick="downgradeGem('${selectedGem.key}')">Downgrade (▼ ${lowerQuality})</button>`;
+      const downBtn = document.createElement('button');
+      downBtn.style.cssText = 'margin-left:8px; background:#e65100; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;';
+      downBtn.textContent = `Downgrade (▼ ${lowerQuality})`;
+      downBtn.addEventListener('click', () => downgradeGem(selectedGem.key));
+      gemInfoEl.appendChild(downBtn);
     }
 
     // Action: Combine button
@@ -3249,15 +2088,17 @@ function updateStats() {
       for (const combo of COMBINATIONS) {
         const ingKeys = findIngredientsForCombo(combo, selectedGem.key);
         if (ingKeys) {
-          extraActionHtml += ` <button style="margin-left:8px; background:#2e7d32; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;" onclick="combineBoardGem('${combo.name}', '${selectedGem.key}')">Combine ➔ ${combo.name}</button>`;
+          const comboBtn = document.createElement('button');
+          comboBtn.style.cssText = 'margin-left:8px; background:#2e7d32; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;';
+          comboBtn.textContent = `Combine ➔ ${combo.name}`;
+          comboBtn.addEventListener('click', () => combineBoardGem(combo.name, selectedGem.key));
+          gemInfoEl.appendChild(comboBtn);
           break;
         }
       }
     }
-
-    $('gemInfo').innerHTML = `<b>${info.name}</b> (${selectedGem.key})${extraActionHtml}`;
   } else {
-    $('gemInfo').innerHTML = selectedStone ? `Selected Tile: ${selectedStone}` : 'None';
+    gemInfoEl.textContent = selectedStone ? `Selected Tile: ${selectedStone}` : 'None';
   }
 }
 
@@ -3266,250 +2107,142 @@ function setMessage(s) {
 }
 
 // ---------------------------------------------------------------------------
-// Canvas events
+// Canvas Events
 // ---------------------------------------------------------------------------
 
-canvas.addEventListener(
-  'click',
-  e => {
-    const r=
-      canvas.getBoundingClientRect();
+canvas.addEventListener('click', e => {
+  const r = canvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / r.width * N);
+  const y = Math.floor((e.clientY - r.top) / r.height * N);
 
-    const x=
-      Math.floor(
-        (e.clientX-r.left)/
-        r.width*
-        N
-      );
+  tryStone(x, y);
+});
 
-    const y=
-      Math.floor(
-        (e.clientY-r.top)/
-        r.height*
-        N
-      );
+let lastMouseClientX = 0;
+let lastMouseClientY = 0;
 
-    tryStone(x,y);
+canvas.addEventListener('mousemove', e => {
+  lastMouseClientX = e.clientX;
+  lastMouseClientY = e.clientY;
+
+  const r = canvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / r.width * N);
+  const y = Math.floor((e.clientY - r.top) / r.height * N);
+
+  const k = key(x, y);
+
+  if (gems.has(k)) {
+    hoveredGemKey = k;
+    showTooltip(e.clientX, e.clientY, k);
+  } else {
+    hideTooltip();
   }
-);
+});
 
-let lastMouseClientX=0;
-let lastMouseClientY=0;
-
-canvas.addEventListener(
-  'mousemove',
-  e => {
-    lastMouseClientX=e.clientX;
-    lastMouseClientY=e.clientY;
-
-    const r=
-      canvas.getBoundingClientRect();
-
-    const x=
-      Math.floor(
-        (e.clientX-r.left)/
-        r.width*
-        N
-      );
-
-    const y=
-      Math.floor(
-        (e.clientY-r.top)/
-        r.height*
-        N
-      );
-
-    const k=key(x,y);
-
-    if (gems.has(k)) {
-      hoveredGemKey=k;
-
-      showTooltip(
-        e.clientX,
-        e.clientY,
-        k
-      );
-    }
-    else {
-      hideTooltip();
-    }
-  }
-);
-
-canvas.addEventListener(
-  'mouseleave',
-  hideTooltip
-);
+canvas.addEventListener('mouseleave', hideTooltip);
 
 // ---------------------------------------------------------------------------
-// Difficulty
+// Difficulty Dropdown
 // ---------------------------------------------------------------------------
 
-const difficultySelect=
-  $('difficulty');
+const difficultySelect = $('difficulty');
 
-DIFFICULTIES.forEach(
-  (d,i) => {
-    const opt=
-      document.createElement('option');
+DIFFICULTIES.forEach((d, i) => {
+  const opt = document.createElement('option');
+  opt.value = i;
+  opt.textContent = `${d.name} (${Math.round(d.mult * 100)}% HP)`;
+  difficultySelect.appendChild(opt);
+});
 
-    opt.value=i;
+difficultySelect.value = difficultyIndex;
 
-    opt.textContent=
-      `${d.name} (${Math.round(d.mult*100)}% HP)`;
-
-    difficultySelect.appendChild(opt);
-  }
-);
-
-difficultySelect.value=
-  difficultyIndex;
-
-difficultySelect.onchange=() => {
+difficultySelect.onchange = () => {
   if (roundActive) {
-    difficultySelect.value=
-      difficultyIndex;
-
+    difficultySelect.value = difficultyIndex;
     return;
   }
 
-  difficultyIndex=
-    Number(
-      difficultySelect.value
-    );
-
-  setMessage(
-    `Difficulty set to ${DIFFICULTIES[difficultyIndex].name}.`
-  );
+  difficultyIndex = Number(difficultySelect.value);
+  setMessage(`Difficulty set to ${DIFFICULTIES[difficultyIndex].name}.`);
 };
 
 // ---------------------------------------------------------------------------
-// Button wiring
+// Button Wiring
 // ---------------------------------------------------------------------------
 
-$('endTurn').onclick=endTurn;
+$('endTurn').onclick = endTurn;
+$('randomGem').onclick = offerGemChoices;
+$('removeStone').onclick = removeStone;
+$('startRound').onclick = startRound;
 
-$('randomGem').onclick=
-  offerGemChoices;
+$('toggleRecipes').onclick = () => recipesOpen ? closeRecipes() : openRecipes();
+$('closeRecipes').onclick = closeRecipes;
 
-$('removeStone').onclick=
-  removeStone;
-
-$('startRound').onclick=
-  startRound;
-
-$('toggleRecipes').onclick=
-  () =>
-    recipesOpen
-      ? closeRecipes()
-      : openRecipes();
-
-$('closeRecipes').onclick=
-  closeRecipes;
-
-$('recipesModal').addEventListener(
-  'click',
-  e => {
-    if (e.target.id==='recipesModal') {
-      closeRecipes();
-    }
+$('recipesModal').addEventListener('click', e => {
+  if (e.target.id === 'recipesModal') {
+    closeRecipes();
   }
-);
+});
 
 // ---------------------------------------------------------------------------
-// New map
+// New Map Generation
 // ---------------------------------------------------------------------------
 
 function generateNewMap() {
-  seed=
-    Math.floor(
-      Math.random()*0xffffffff
-    );
+  seed = Math.floor(Math.random() * 0xffffffff);
+  rand = rngFactory(seed);
 
-  rand=
-    rngFactory(seed);
+  turn = 1;
+  stonesLeft = 5;
+  gemAvailable = true;
 
-  turn=1;
-  stonesLeft=5;
-  gemAvailable=true;
-
-  selectedGem=null;
-  selectedStone=null;
-  pendingGemChoice=null;
+  selectedGem = null;
+  selectedStone = null;
+  pendingGemChoice = null;
 
   gems.clear();
-
-  combatLogEntries=[];
+  combatLogEntries = [];
 
   renderLog();
   renderGemChoicePanel();
-
   makeMap();
-
   updateStats();
 
-  setMessage(
-    "New map generated. Click an empty cell to place a stone."
-  );
+  setMessage("New map generated. Click an empty cell to place a stone.");
 }
 
-$('newMap').onclick=() => {
+$('newMap').onclick = () => {
   if (roundActive) {
-    setMessage(
-      "Can't generate a new map while a round is in progress."
-    );
-
-    return;
+    return setMessage("Can't generate a new map while a round is in progress.");
   }
-
-  $('confirmNewMapModal')
-    .classList
-    .add('open');
+  $('confirmNewMapModal').classList.add('open');
 };
 
-$('confirmNewMapYes').onclick=() => {
-  $('confirmNewMapModal')
-    .classList
-    .remove('open');
-
+$('confirmNewMapYes').onclick = () => {
+  $('confirmNewMapModal').classList.remove('open');
   generateNewMap();
 };
 
-$('confirmNewMapNo').onclick=() => {
-  $('confirmNewMapModal')
-    .classList
-    .remove('open');
+$('confirmNewMapNo').onclick = () => {
+  $('confirmNewMapModal').classList.remove('open');
 };
 
-$('confirmNewMapModal').addEventListener(
-  'click',
-  e => {
-    if (
-      e.target.id===
-      'confirmNewMapModal'
-    ) {
-      $('confirmNewMapModal')
-        .classList
-        .remove('open');
-    }
+$('confirmNewMapModal').addEventListener('click', e => {
+  if (e.target.id === 'confirmNewMapModal') {
+    $('confirmNewMapModal').classList.remove('open');
   }
-);
+});
 
 // ---------------------------------------------------------------------------
-// Main loop
+// Main Game Loop
 // ---------------------------------------------------------------------------
 
 function loop(now) {
-  const dt=
-    Math.min(
-      50,
-      now-lastFrameTime
-    );
-
-  lastFrameTime=now;
+  const dt = Math.min(50, now - lastFrameTime);
+  lastFrameTime = now;
 
   updateSpawning(now);
-  updateCreeps(dt,now);
+  updateCreeps(dt, now);
   updateTowers(now);
   updateEffects(now);
   draw(now);
@@ -3517,13 +2250,8 @@ function loop(now) {
 
   if (hoveredGemKey) {
     if (gems.has(hoveredGemKey)) {
-      showTooltip(
-        lastMouseClientX,
-        lastMouseClientY,
-        hoveredGemKey
-      );
-    }
-    else {
+      showTooltip(lastMouseClientX, lastMouseClientY, hoveredGemKey);
+    } else {
       hideTooltip();
     }
   }
@@ -3535,23 +2263,20 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
+// Attach UI-invoked functions globally for window compatibility
+window.downgradeGem = downgradeGem;
+window.removeStone = removeStone;
+
 // ---------------------------------------------------------------------------
-// Initialise
+// Initialization
 // ---------------------------------------------------------------------------
 
-seed=Date.now()>>>0;
-rand=rngFactory(seed);
+seed = Date.now() >>> 0;
+rand = rngFactory(seed);
 
 makeMap();
 updateStats();
 
-setMessage(
-  "Click an empty cell to place a stone. Click a stone to select it for gem conversion."
-);
+setMessage("Click an empty cell to place a stone. Click a stone to select it for gem conversion.");
 
 requestAnimationFrame(loop);
-
-</script>
-</body>
-</html>
-```
