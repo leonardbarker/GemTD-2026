@@ -171,3 +171,13 @@ export const COMBO_UPGRADES = {
     effect: "Strikes up to 2 additional targets."
   }
 };
+
+function selectGem(gem) {
+    // 1. Process gem selection logic
+    applyGemEffect(gem);
+    
+    // 2. Autoplay: Automatically transition to the next round
+    setTimeout(() => {
+        startNextRound(); // Replace with your actual next-round function name
+    }, 500); // Optional brief delay so the player sees their selection
+}
