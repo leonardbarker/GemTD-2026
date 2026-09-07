@@ -229,9 +229,7 @@ export function getWaveDefinition(round) {
 
   const cycle = Math.floor((r - 1) / 50);
   const cycleRound = ((r - 1) % 50) + 1;
-  // Continuous HP growth across the 50-round cadence. The wave composition
-  // repeats, but the HP curve never resets at round 51.
-  const hpScale = Math.pow(1.095, (r - 1) / 10);
+  const hpScale = Math.pow(1.035, cycle) * Math.pow(1.095, Math.max(0, r - cycle * 50 - 1) / 10);
 
   return {
     round: r,
