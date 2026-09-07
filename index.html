@@ -94,7 +94,7 @@
 
   <div class="bar">
     <button id="randomGem" disabled>Convert selected stone (choose 1 of 3)</button>
-    <button id="removeStone" disabled>Remove selected stone</button>
+    <button id="removeStone" disabled>Undo last stone</button>
     <div class="stat" id="gemInfo">No gem or stone selected</div>
   </div>
 
@@ -180,6 +180,8 @@
   let gemAvailable = true;
   let selectedGem = null;
   let selectedStone = null;
+  let turnStonePlacements = [];
+  let stoneSelectionLocked = false;
   let hoveredGemKey = null;
   let hoveredCreepId = null;
   let pendingGemChoice = null;
@@ -468,9 +470,10 @@
     if (blocked.has(k) && !gems.has(k)) {
       selectedStone=k;
       selectedGem=null;
+      stoneSelectionLocked=true;
 
       setMessage(
-        `Stone at ${k} selected. Convert it to a random gem, or click another stone.`
+        `Stone at ${k} selected for conversion. Stone placement undo is now locked.`
       );
 
       updateStats();
@@ -522,6 +525,9 @@
     }
 
     stonesLeft--;
+    turnStonePlacements.push(k);
+    selectedStone=null;
+    selectedGem=null;
 
     path=candidate;
     pathPixels=toPixelPath(path);
@@ -643,6 +649,8 @@
         "Select one of your stones first."
       );
     }
+
+    stoneSelectionLocked=true;
 
     const types=Object.keys(GEM_TYPES);
     const options=[];
@@ -898,6 +906,8 @@
     selectedGem=null;
     selectedStone=null;
     pendingGemChoice=null;
+    turnStonePlacements=[];
+    stoneSelectionLocked=false;
 
     renderGemChoicePanel();
 
@@ -941,7 +951,7 @@ function baseCreepHp(forRound) {
   const r = Math.max(1, forRound);
   const wave = getWaveDefinition(r);
 
-  return wave.hpBase * wave.hpScale * DIFFICULTIES[difficultyIndex].mult;
+  return wave.hpBase * 0.85 * wave.hpScale * DIFFICULTIES[difficultyIndex].mult;
 }
 
 function loseLife() {
@@ -1006,7 +1016,7 @@ function downgradeGem(key) {
   updateStats();
 }
 
-function removeStone() {
+function undoLastStone() {
   if (gameOver) {
     return setMessage("Game over - start a new map to play again.");
   }
@@ -1015,30 +1025,24 @@ function removeStone() {
     return setMessage("Can't edit the maze while a round is in progress.");
   }
 
-  if (pendingGemChoice) {
-    return setMessage("Pick one of the three offered gems first.");
+  if (pendingGemChoice || stoneSelectionLocked) {
+    return setMessage("Stone placement undo is locked after selecting a stone for conversion.");
   }
 
-  if (!selectedStone || !blocked.has(selectedStone)) {
-    return setMessage("Select a stone to remove first.");
+  const k = turnStonePlacements.pop();
+  if (!k || !blocked.has(k) || gems.has(k)) {
+    return setMessage("There are no stone placements from this turn to undo.");
   }
 
-  if (gems.has(selectedStone)) {
-    return setMessage("That's a gem, not a plain stone - gems can't be removed.");
-  }
-
-  const k = selectedStone;
   blocked.delete(k);
 
   const candidate = fullPath();
-
   path = candidate;
   pathPixels = candidate ? toPixelPath(candidate) : [];
 
   stonesLeft = Math.min(5, stonesLeft + 1);
-  selectedStone = null;
 
-  setMessage(`Stone removed at ${k}. ${stonesLeft} stone${stonesLeft === 1 ? '' : 's'} remaining.`);
+  setMessage(`Undid stone at ${k}. ${stonesLeft} stone${stonesLeft === 1 ? '' : 's'} remaining.`);
 
   updateStats();
   draw();
@@ -1588,11 +1592,24 @@ function draw(now = performance.now()) {
 
     const [x, y] = k.split(',').map(Number);
 
-    ctx.fillStyle = '#707070';
-    ctx.fillRect(x * cell + 2, y * cell + 2, cell - 4, cell - 4);
+    const isSelectedStone = selectedStone === k;
+    const isUndoableStone = turnStonePlacements.includes(k) && !stoneSelectionLocked;
 
-    ctx.strokeStyle = '#4e4e4e';
-    ctx.strokeRect(x * cell + 2, y * cell + 2, cell - 4, cell - 4);
+    if (isSelectedStone) {
+      ctx.save();
+      ctx.shadowColor = '#ffe66d';
+      ctx.shadowBlur = 16;
+      ctx.fillStyle = '#8f7a2f';
+      ctx.fillRect(x * cell + 1, y * cell + 1, cell - 2, cell - 2);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#707070';
+      ctx.fillRect(x * cell + 2, y * cell + 2, cell - 4, cell - 4);
+    }
+
+    ctx.strokeStyle = isSelectedStone ? '#fff6a3' : (isUndoableStone ? '#9a9a9a' : '#4e4e4e');
+    ctx.lineWidth = isSelectedStone ? 3 : 1;
+    ctx.strokeRect(x * cell + (isSelectedStone ? 1 : 2), y * cell + (isSelectedStone ? 1 : 2), cell - (isSelectedStone ? 2 : 4), cell - (isSelectedStone ? 2 : 4));
   }
 
   const sparkleKeys = sparkleEligibleKeys();
@@ -2185,8 +2202,42 @@ function hideTooltip() {
 
 let recipesOpen = false;
 
+function validateRecipes() {
+  const errors = [];
+
+  for (const recipe of COMBINATIONS) {
+    if (!COMBO_GEMS[recipe.name]) {
+      errors.push(`Recipe "${recipe.name}" has no matching COMBO_GEMS definition.`);
+    }
+
+    for (const req of recipe.requires) {
+      if (!GEM_TYPES[req.t]) {
+        errors.push(`Recipe "${recipe.name}" references unknown gem type "${req.t}".`);
+      }
+      if (!GEM_LEVELS.includes(req.q)) {
+        errors.push(`Recipe "${recipe.name}" references unknown quality "${req.q}".`);
+      }
+    }
+  }
+
+  for (const comboName of Object.keys(COMBO_GEMS)) {
+    if (!COMBINATIONS.some(recipe => recipe.name === comboName)) {
+      errors.push(`Combination gem "${comboName}" has no recipe entry.`);
+    }
+  }
+
+  if (errors.length) {
+    console.error('Recipe validation failed:', errors);
+  } else {
+    console.info(`Recipe validation passed: ${COMBINATIONS.length} recipes loaded and displayed.`);
+  }
+
+  return errors;
+}
+
 function renderRecipesPanel() {
   const counts = boardCounts();
+  const recipeErrors = validateRecipes();
 
   const html = COMBINATIONS
     .map(c => {
@@ -2214,7 +2265,7 @@ function renderRecipesPanel() {
     })
     .join('');
 
-  $('recipesList').innerHTML = html;
+  $('recipesList').innerHTML = `<div class="stats-line" style="margin-bottom:10px;color:#aaa;">Showing all ${COMBINATIONS.length} recipes.</div>${recipeErrors.length ? `<div class="stats-line miss" style="margin-bottom:10px;">Recipe data issue: ${recipeErrors.join(' ')}</div>` : ''}${html}`;
 }
 
 function openRecipes() {
@@ -2255,9 +2306,8 @@ function updateStats() {
     gameOver ||
     roundActive ||
     !!pendingGemChoice ||
-    !selectedStone ||
-    !blocked.has(selectedStone) ||
-    gems.has(selectedStone);
+    stoneSelectionLocked ||
+    turnStonePlacements.length === 0;
 
   $('newMap').disabled = roundActive;
   $('endTurn').disabled = gameOver || roundActive || !!pendingGemChoice;
@@ -2299,7 +2349,7 @@ function updateStats() {
       }
     }
   } else {
-    gemInfoEl.textContent = selectedStone ? `Selected Tile: ${selectedStone}` : 'None';
+    gemInfoEl.textContent = selectedStone ? `Selected stone for conversion: ${selectedStone}` : 'None';
   }
 }
 
@@ -2371,6 +2421,7 @@ DIFFICULTIES.forEach((d, i) => {
 });
 
 difficultySelect.value = difficultyIndex;
+validateRecipes();
 
 difficultySelect.onchange = () => {
   if (roundActive) {
@@ -2388,7 +2439,7 @@ difficultySelect.onchange = () => {
 
 $('endTurn').onclick = endTurn;
 $('randomGem').onclick = offerGemChoices;
-$('removeStone').onclick = removeStone;
+$('removeStone').onclick = undoLastStone;
 $('startRound').onclick = startRound;
 
 $('toggleRecipes').onclick = () => recipesOpen ? closeRecipes() : openRecipes();
@@ -2415,6 +2466,8 @@ function generateNewMap() {
   selectedGem = null;
   selectedStone = null;
   pendingGemChoice = null;
+  turnStonePlacements = [];
+  stoneSelectionLocked = false;
 
   gems.clear();
   combatLogEntries = [];
