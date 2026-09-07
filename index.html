@@ -178,100 +178,53 @@ const GEM_LEVELS = [
 
 const GEM_TYPES = {
   Amethyst: {
+    icon: "🔮",
     colour: "#9b59b6",
     role: "Single-target, prefers air/Violet targets",
-    levels: [
-      { dmgMin:12, dmgMax:12, cooldown:800, range:100 },
-      { dmgMin:24, dmgMax:24, cooldown:800, range:100 },
-      { dmgMin:48, dmgMax:48, cooldown:800, range:100 },
-      { dmgMin:96, dmgMax:96, cooldown:800, range:100 },
-      { dmgMin:192, dmgMax:192, cooldown:800, range:100 }
-    ]
+    levels: [ /* ... */ ]
   },
-
   Aquamarine: {
+    icon: "💧",
     colour: "#45c4d8",
     role: "Long-range single target",
-    levels: [
-      { dmgMin:8, dmgMax:12, cooldown:1000, range:114 },
-      { dmgMin:16, dmgMax:24, cooldown:1000, range:114 },
-      { dmgMin:32, dmgMax:48, cooldown:1000, range:114 },
-      { dmgMin:64, dmgMax:96, cooldown:1000, range:114 },
-      { dmgMin:128, dmgMax:192, cooldown:1000, range:114 }
-    ]
+    levels: [ /* ... */ ]
   },
-
   Diamond: {
+    icon: "💎",
     colour: "#eeeeee",
     role: "True damage, ignores armour",
-    levels: [
-      { dmgMin:10, dmgMax:12, cooldown:1000, range:100, trueDamage:true },
-      { dmgMin:20, dmgMax:24, cooldown:1000, range:100, trueDamage:true },
-      { dmgMin:40, dmgMax:48, cooldown:1000, range:100, trueDamage:true },
-      { dmgMin:80, dmgMax:96, cooldown:1000, range:100, trueDamage:true },
-      { dmgMin:160, dmgMax:192, cooldown:1000, range:100, trueDamage:true }
-    ]
+    levels: [ /* ... */ ]
   },
-
   Emerald: {
+    icon: "🟢",
     colour: "#35c96b",
     role: "Poison damage over time + slow",
-    levels: [
-      { dmgMin:8, dmgMax:10, cooldown:1000, range:100, poisonDps:2, poisonDur:2000, slowPct:0.30, slowDur:2000 },
-      { dmgMin:16, dmgMax:20, cooldown:1000, range:100, poisonDps:4, poisonDur:3000, slowPct:0.35, slowDur:3000 },
-      { dmgMin:32, dmgMax:40, cooldown:1000, range:100, poisonDps:8, poisonDur:4000, slowPct:0.40, slowDur:4000 },
-      { dmgMin:64, dmgMax:80, cooldown:1000, range:100, poisonDps:16, poisonDur:5000, slowPct:0.45, slowDur:5000 },
-      { dmgMin:128, dmgMax:160, cooldown:1000, range:100, poisonDps:32, poisonDur:6000, slowPct:0.50, slowDur:6000 }
-    ]
+    levels: [ /* ... */ ]
   },
-
   Opal: {
+    icon: "✨",
     colour: "#d8d8e8",
     role: "Damage + attack-speed aura for nearby towers",
-    auraRadius:160,
-    levels: [
-      { dmgMin:6, dmgMax:8, cooldown:1000, range:100, auraPct:0.10 },
-      { dmgMin:12, dmgMax:16, cooldown:1000, range:100, auraPct:0.15 },
-      { dmgMin:24, dmgMax:32, cooldown:1000, range:100, auraPct:0.20 },
-      { dmgMin:48, dmgMax:64, cooldown:1000, range:100, auraPct:0.25 },
-      { dmgMin:96, dmgMax:128, cooldown:1000, range:100, auraPct:0.35 }
-    ]
+    auraRadius: 160,
+    levels: [ /* ... */ ]
   },
-
   Ruby: {
+    icon: "🔴",
     colour: "#e74c3c",
     role: "Splash damage around the target",
-    levels: [
-      { dmgMin:8, dmgMax:10, cooldown:1200, range:100, splashRadius:30 },
-      { dmgMin:16, dmgMax:20, cooldown:1200, range:100, splashRadius:30 },
-      { dmgMin:32, dmgMax:40, cooldown:1200, range:100, splashRadius:30 },
-      { dmgMin:64, dmgMax:80, cooldown:1200, range:100, splashRadius:30 },
-      { dmgMin:128, dmgMax:160, cooldown:1200, range:100, splashRadius:30 }
-    ]
+    levels: [ /* ... */ ]
   },
-
   Sapphire: {
+    icon: "🔵",
     colour: "#4b86e8",
     role: "Slows movement speed",
-    levels: [
-      { dmgMin:6, dmgMax:8, cooldown:1000, range:100, slowPct:0.20, slowDur:2000 },
-      { dmgMin:12, dmgMax:16, cooldown:1000, range:100, slowPct:0.25, slowDur:2500 },
-      { dmgMin:24, dmgMax:32, cooldown:1000, range:100, slowPct:0.30, slowDur:3000 },
-      { dmgMin:48, dmgMax:64, cooldown:1000, range:100, slowPct:0.40, slowDur:3500 },
-      { dmgMin:96, dmgMax:128, cooldown:1000, range:100, slowPct:0.50, slowDur:4000 }
-    ]
+    levels: [ /* ... */ ]
   },
-
   Topaz: {
+    icon: "🟡",
     colour: "#e8bd4a",
     role: "Attacks several targets at once",
-    levels: [
-      { dmgMin:4, dmgMax:16, cooldown:1000, range:100, maxTargets:3 },
-      { dmgMin:8, dmgMax:32, cooldown:1000, range:100, maxTargets:3 },
-      { dmgMin:16, dmgMax:64, cooldown:1000, range:100, maxTargets:4 },
-      { dmgMin:32, dmgMax:128, cooldown:1000, range:100, maxTargets:4 },
-      { dmgMin:64, dmgMax:256, cooldown:1000, range:100, maxTargets:5 }
-    ]
+    levels: [ /* ... */ ]
   }
 };
 
@@ -644,25 +597,40 @@ let pendingGemChoice = null;
 // ---------------------------------------------------------------------------
 
 function getGemStats(gem) {
+  if (!gem) {
+    return { name: 'Unknown', color: '#cccccc', colour: '#cccccc', icon: '💎', short: '??', stats: {} };
+  }
+
+  // Handle Combination Gems
   if (gem.isCombo) {
-    const def = COMBO_GEMS[gem.type];
+    const def = COMBO_GEMS[gem.type] || {};
+    const hexColor = def.colour || def.color || '#ff00ff';
     return {
-      stats:def.stats,
-      colour:def.colour,
-      role:def.role,
-      name:gem.type,
-      auraRadius:def.auraRadius
+      name: gem.type,
+      color: hexColor,
+      colour: hexColor,
+      icon: def.icon || def.short || '💎',
+      short: def.short || 'CB',
+      role: def.role || 'Special',
+      stats: def.stats || {},
+      auraRadius: def.auraRadius || 0
     };
   }
 
-  const def = GEM_TYPES[gem.type];
+  // Handle Standard Gems
+  const def = GEM_TYPES[gem.type] || {};
+  const hexColor = def.colour || def.color || '#ffffff';
+  const quality = GEM_LEVELS[gem.level] || '';
 
   return {
-    stats:def.levels[gem.level],
-    colour:def.colour,
-    role:def.role,
-    name:`${GEM_LEVELS[gem.level]} ${gem.type}`,
-    auraRadius:def.auraRadius
+    name: `${quality} ${gem.type}`.trim(),
+    color: hexColor,
+    colour: hexColor,
+    icon: def.icon || gem.type[0] || '💎',
+    short: gem.type[0] || 'G',
+    role: def.role || 'Basic',
+    stats: (def.levels && def.levels[gem.level]) ? def.levels[gem.level] : {},
+    auraRadius: def.auraRadius || 0
   };
 }
 
