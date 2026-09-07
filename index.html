@@ -3260,12 +3260,13 @@ function updateStats() {
     const info = getGemStats(selectedGem);
     let extraActionHtml = '';
 
-    // Action: Downgrade button (only for standard gems level 1 or higher)
+    // Action: Downgrade button
     if (!selectedGem.isCombo && selectedGem.level > 0) {
-      extraActionHtml += ` <button style="margin-left:8px; background:#e65100; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;" onclick="downgradeGem('${selectedGem.key}')">Downgrade (▼ ${GEM_LEVELS[selectedGem.level - 1]})</button>`;
+      const lowerQuality = GEM_LEVELS[selectedGem.level - 1];
+      extraActionHtml += ` <button style="margin-left:8px; background:#e65100; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;" onclick="downgradeGem('${selectedGem.key}')">Downgrade (▼ ${lowerQuality})</button>`;
     }
 
-    // Action: Check if this gem can complete any recipe on the board
+    // Action: Combine button
     if (!selectedGem.isCombo) {
       for (const combo of COMBINATIONS) {
         const ingKeys = findIngredientsForCombo(combo, selectedGem.key);
@@ -3275,11 +3276,6 @@ function updateStats() {
         }
       }
     }
-
-    $('gemInfo').innerHTML = `<b>${info.name}</b> (${selectedGem.key})${extraActionHtml}`;
-  } else {
-    $('gemInfo').innerHTML = selectedStone ? `Selected Tile: ${selectedStone}` : 'None';
-  }
 
     $('gemInfo').innerHTML = `<b>${info.name}</b> (${selectedGem.key})${extraActionHtml}`;
   } else {
