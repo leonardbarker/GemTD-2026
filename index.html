@@ -155,7 +155,7 @@
   // 1. Module Imports
   import { GEM_LEVELS, GEM_TYPES } from './js/definitions/gemTypes.js';
   import { COMBO_GEMS, COMBINATIONS, COMBO_UPGRADES } from './js/definitions/comboGems.js';
-  import { CREEP_TYPES, WAVES, DIFFICULTIES } from './js/definitions/creeps.js';
+  import { CREEP_TYPES, WAVES, DIFFICULTIES, getWaveDefinition, getCreepDefinition } from './js/definitions/creeps.js';
 
   // 2. Global Constants & Canvas Setup
   const N = 20;
@@ -181,6 +181,7 @@
   let selectedGem = null;
   let selectedStone = null;
   let hoveredGemKey = null;
+  let hoveredCreepId = null;
   let pendingGemChoice = null;
 
   // ---------------------------------------------------------------------------
@@ -933,15 +934,14 @@ function resetCombat() {
   }
 }
 
-// Global Creep HP scaling
-const GLOBAL_HP_SCALE = 0.075625;
-
+// Base HP is deliberately much gentler than a literal Dota port. The
+// quadratic term gives the uncapped game a gradually accelerating curve while
+// keeping the early rounds compatible with the existing tower damage.
 function baseCreepHp(forRound) {
-  const base = 260 + (forRound - 1) * 60;
+  const r = Math.max(1, forRound);
+  const wave = getWaveDefinition(r);
 
-  return base *
-    DIFFICULTIES[difficultyIndex].mult *
-    GLOBAL_HP_SCALE;
+  return wave.hpBase * wave.hpScale * DIFFICULTIES[difficultyIndex].mult;
 }
 
 function loseLife() {
@@ -956,6 +956,26 @@ function loseLife() {
   }
 
   return false;
+}
+
+function getCreepDisplayName(c) {
+  if (c.boss) return 'Boss';
+  return c.type;
+}
+
+function isTowerDisarmed(pos, now) {
+  for (const c of activeCreeps) {
+    if (!c.disarmRadius) continue;
+    if (Math.hypot(c.x - pos.x, c.y - pos.y) <= c.disarmRadius) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildRoundCreepType() {
+  const wave = getWaveDefinition(round);
+  return wave.types[spawnedThisRound] || 'Normal';
 }
 
 // ---------------------------------------------------------------------------
@@ -1044,29 +1064,53 @@ function startRound() {
 
   lastSpawnTime = performance.now() - SPAWN_INTERVAL_MS;
 
-  setMessage(`Round ${round} started. 20 creeps incoming.`);
-  logEvent(`— Round ${round} started —`);
+  const wave = getWaveDefinition(round);
+  setMessage(`${wave.label} started. 20 creeps incoming.`);
+  logEvent(`— ${wave.label} —`);
+
+  if (round % 10 === 0) {
+    logEvent("⚠ Boss incoming. Expect a major HP spike.");
+  }
 
   updateStats();
 }
 
 function spawnOneCreep() {
-  const hp = baseCreepHp(round);
+  const typeName = buildRoundCreepType();
+  const def = getCreepDefinition(typeName, round);
+  const hp = baseCreepHp(round) * def.hpMult;
   const start = pathPixels[0];
 
-  activeCreeps.push({
+  const creep = {
     id: nextCreepId++,
+    type: typeName,
+    name: typeName,
+    boss: !!def.boss,
     hp,
     maxHp: hp,
     segIndex: 0,
     segT: 0,
     x: start.x,
     y: start.y,
+    speedMult: def.speed,
+    armour: def.armour,
+    magicResist: def.magicResist,
+    flying: !!def.flying,
+    evasion: def.evasion || 0,
+    physicalImmune: !!def.physicalImmune,
+    magicImmune: !!def.magicImmune,
+    disarmRadius: def.disarmRadius || 0,
+    disarmDuration: def.disarmDuration || 0,
+    regenPct: def.regenPct || 0,
     slowPct: 0,
     slowUntil: 0,
-    poison: null
-  });
+    poison: null,
+    disarmedUntil: 0,
+    colour: def.color,
+    radius: def.radius || 0.20
+  };
 
+  activeCreeps.push(creep);
   spawnedThisRound++;
 }
 
@@ -1107,20 +1151,27 @@ function updateCreeps(dt, now) {
   const survivors = [];
 
   for (const c of activeCreeps) {
-    // Process poison status
+    // Poison is magic damage, so magic resistance and magic immunity apply.
     if (c.poison && now < c.poison.until) {
-      c.hp -= c.poison.dps * (dt / 1000);
+      applyDamage(c, c.poison.dps * (dt / 1000), 'magic', { silent: true });
     } else if (c.poison && now >= c.poison.until) {
       c.poison = null;
     }
 
+    // Regeneration is intentionally modest. It matters on long exposure,
+    // but should not undo a tower's burst damage.
+    if (c.regenPct > 0 && c.hp > 0 && c.hp < c.maxHp) {
+      c.hp = Math.min(c.maxHp, c.hp + c.maxHp * c.regenPct * (dt / 1000));
+    }
+
     if (c.hp <= 0) {
-      logEvent(`Creep #${c.id} died.`);
+      logEvent(`${getCreepDisplayName(c)} #${c.id} died.`);
       continue;
     }
 
     const slowed = c.slowUntil > now;
-    const speed = BASE_CREEP_SPEED * GAME_SPEED * (slowed ? (1 - c.slowPct) : 1);
+    const speed = BASE_CREEP_SPEED * GAME_SPEED * c.speedMult *
+      (slowed ? (1 - c.slowPct) : 1);
 
     let remaining = speed * (dt / 1000);
 
@@ -1147,7 +1198,7 @@ function updateCreeps(dt, now) {
     if (c.segIndex >= pathPixels.length - 1) {
       const justEnded = loseLife();
 
-      logEvent(`Creep #${c.id} reached the exit. Lives: ${livesLeft}/${MAX_LIVES}.`);
+      logEvent(`${getCreepDisplayName(c)} #${c.id} reached the exit. Lives: ${livesLeft}/${MAX_LIVES}.`);
 
       if (justEnded) {
         logEvent("— Game over: out of lives —");
@@ -1172,12 +1223,16 @@ function creepProgress(c) {
   return c.segIndex + c.segT;
 }
 
-function findTarget(px, py, range, exclude) {
+function findTarget(px, py, range, exclude, gem = null) {
   let best = null;
   let bestProgress = -1;
 
   for (const c of activeCreeps) {
     if (exclude && exclude.has(c.id)) {
+      continue;
+    }
+
+    if (gem && !canGemHitCreep(gem, c)) {
       continue;
     }
 
@@ -1196,7 +1251,7 @@ function findTarget(px, py, range, exclude) {
   return best;
 }
 
-function findTargets(px, py, range, maxTargets) {
+function findTargets(px, py, range, maxTargets, gem = null) {
   const found = [];
 
   const candidates = activeCreeps
@@ -1204,7 +1259,7 @@ function findTargets(px, py, range, maxTargets) {
       c,
       d: Math.hypot(c.x - px, c.y - py)
     }))
-    .filter(o => o.d <= range)
+    .filter(o => o.d <= range && (!gem || canGemHitCreep(gem, o.c)))
     .sort((a, b) => creepProgress(b.c) - creepProgress(a.c));
 
   for (const o of candidates) {
@@ -1217,8 +1272,54 @@ function findTargets(px, py, range, maxTargets) {
   return found;
 }
 
-function applyDamage(creep, amount) {
-  creep.hp -= amount;
+function canGemHitCreep(gem, creep) {
+  // All current gems remain able to target flying creeps. Flying is a
+  // positional/visual distinction for this prototype, not a hard counter.
+  // This avoids a dead build if a player reaches a flying round with an
+  // unlucky board.
+  return true;
+}
+
+function getGemDamageType(gem) {
+  const { stats } = getGemStats(gem);
+  return stats.damageType || 'physical';
+}
+
+function mitigateDamage(creep, amount, damageType, trueDamage = false) {
+  if (amount <= 0) return 0;
+
+  if (damageType === 'magic') {
+    if (creep.magicImmune || creep.magicResist >= 1) return 0;
+    return amount * Math.max(0, 1 - creep.magicResist);
+  }
+
+  if (creep.physicalImmune) return 0;
+  if (trueDamage) return amount;
+
+  const armour = Math.max(0, creep.armour || 0);
+  return amount * (1 - armour / (armour + 10));
+}
+
+function applyDamage(creep, amount, damageType = 'physical', opts = {}) {
+  if (!creep || creep.hp <= 0) return 0;
+
+  if (damageType === 'physical' && !opts.trueDamage && creep.evasion > 0 && rand() < creep.evasion) {
+    if (!opts.silent) {
+      pushEffect({
+        kind: 'damageText',
+        x: creep.x,
+        y: creep.y,
+        text: 'DODGE',
+        start: performance.now(),
+        life: 650
+      });
+    }
+    return 0;
+  }
+
+  const actual = mitigateDamage(creep, amount, damageType, !!opts.trueDamage);
+  creep.hp -= actual;
+  return actual;
 }
 
 function applySlow(creep, pct, durMs, now) {
@@ -1230,6 +1331,9 @@ function applySlow(creep, pct, durMs, now) {
 }
 
 function applyPoison(creep, dps, durMs, now) {
+  // Poison is magic. Magic-immune creeps cannot receive it.
+  if (creep.magicImmune) return;
+
   const until = now + durMs;
 
   if (!creep.poison || dps >= creep.poison.dps || until > creep.poison.until) {
@@ -1276,28 +1380,34 @@ function escapeHtml(s) {
 // Attacks & Tower Logic
 // ---------------------------------------------------------------------------
 
-function attackCreep(gemPos, gem, target, now, opts) {
+function attackCreep(gemPos, gem, target, now, opts = {}) {
+  if (!target || target.hp <= 0) return;
+
   const { stats, colour, name } = getGemStats(gem);
-
+  const damageType = getGemDamageType(gem);
   const dmg = Math.round(randRange(stats.dmgMin, stats.dmgMax));
+  const actual = applyDamage(target, dmg, damageType, {
+    trueDamage: !!stats.trueDamage,
+    silent: !!opts.silent
+  });
 
-  applyDamage(target, dmg);
+  let note = ` (${damageType}${stats.trueDamage ? ', ignores armour' : ''})`;
 
-  let note = "";
-
-  if (stats.poisonDps) {
+  if (stats.poisonDps && target.hp > 0) {
     applyPoison(target, stats.poisonDps, stats.poisonDur, now);
     note += ` (poison ${stats.poisonDps}/s)`;
   }
 
-  if (stats.slowPct) {
+  if (stats.slowPct && target.hp > 0) {
     applySlow(target, stats.slowPct, stats.slowDur, now);
     note += ` (${Math.round(stats.slowPct * 100)}% slow)`;
   }
 
-  if (stats.splashRadius && !opts?.isSplashHit) {
+  if (stats.splashRadius && !opts.isSplashHit) {
     const splashTargets = activeCreeps.filter(
-      c => c !== target && Math.hypot(c.x - target.x, c.y - target.y) <= stats.splashRadius
+      c => c !== target && c.hp > 0 &&
+        Math.hypot(c.x - target.x, c.y - target.y) <= stats.splashRadius &&
+        canGemHitCreep(gem, c)
     );
 
     for (const sc of splashTargets) {
@@ -1332,13 +1442,13 @@ function attackCreep(gemPos, gem, target, now, opts) {
     kind: 'damageText',
     x: target.x,
     y: target.y,
-    text: `-${dmg}`,
+    text: actual > 0 ? `-${Math.round(actual)}` : (damageType === 'physical' && target.evasion ? 'DODGE' : 'IMMUNE'),
     start: now,
     life: 650
   });
 
-  if (!opts?.silent) {
-    logEvent(`${name} hit Creep #${target.id} for ${dmg}${note}`);
+  if (!opts.silent) {
+    logEvent(`${name} hit ${getCreepDisplayName(target)} #${target.id} for ${Math.round(actual)}${note}`);
   }
 }
 
@@ -1380,6 +1490,10 @@ function updateTowers(now) {
 
     const { stats } = getGemStats(gem);
 
+    if (isTowerDisarmed(pos, now)) {
+      continue;
+    }
+
     let auraBonus = 0;
 
     for (const o of auraSources) {
@@ -1395,7 +1509,7 @@ function updateTowers(now) {
     }
 
     if (stats.maxTargets) {
-      const targets = findTargets(pos.x, pos.y, stats.range, stats.maxTargets);
+      const targets = findTargets(pos.x, pos.y, stats.range, stats.maxTargets, gem);
 
       if (targets.length === 0) {
         continue;
@@ -1407,7 +1521,7 @@ function updateTowers(now) {
 
       gem.lastAttack = now;
     } else {
-      const target = findTarget(pos.x, pos.y, stats.range, null);
+      const target = findTarget(pos.x, pos.y, stats.range, null, gem);
 
       if (!target) {
         continue;
@@ -1571,21 +1685,48 @@ function draw(now = performance.now()) {
   for (const c of activeCreeps) {
     const slowed = c.slowUntil > now;
     const poisoned = !!c.poison;
+    const disarmed = c.disarmRadius > 0 && isTowerDisarmed({ x: c.x, y: c.y }, now);
+    const r = cell * (c.boss ? 0.30 : c.radius);
 
-    ctx.fillStyle = poisoned ? '#3f8f4f' : slowed ? '#3f6f9f' : '#222';
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, cell * .2, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillStyle = c.colour || (poisoned ? '#3f8f4f' : slowed ? '#3f6f9f' : '#222');
+    if (c.flying) {
+      ctx.beginPath();
+      ctx.ellipse(c.x, c.y - cell * .03, r * 1.15, r * .78, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(c.x - r * 1.25, c.y + r * .55);
+      ctx.lineTo(c.x - r * .45, c.y + r * .1);
+      ctx.moveTo(c.x + r * 1.25, c.y + r * .55);
+      ctx.lineTo(c.x + r * .45, c.y + r * .1);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.strokeStyle = c.boss ? '#f5c542' : hoveredCreepId === c.id ? '#fff' : '#111';
+    ctx.lineWidth = c.boss ? 3 : 1.5;
+    ctx.stroke();
 
     ctx.fillStyle = '#fff';
     ctx.beginPath();
-    ctx.arc(c.x, c.y, cell * .08, 0, Math.PI * 2);
+    ctx.arc(c.x, c.y, cell * (c.boss ? .10 : .055), 0, Math.PI * 2);
     ctx.fill();
 
-    const barW = cell * .5;
-    const barH = 4;
+    if (c.boss) {
+      ctx.fillStyle = '#f5c542';
+      ctx.font = 'bold 9px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('BOSS', c.x, c.y + 3);
+    }
+
+    const barW = cell * (c.boss ? .72 : .55);
+    const barH = c.boss ? 6 : 4;
     const bx = c.x - barW / 2;
-    const by = c.y - cell * .36;
+    const by = c.y - r - cell * .13;
 
     ctx.fillStyle = '#000';
     ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);
@@ -1594,8 +1735,31 @@ function draw(now = performance.now()) {
     ctx.fillRect(bx, by, barW, barH);
 
     const pct = Math.max(0, c.hp / c.maxHp);
-    ctx.fillStyle = pct > 0.5 ? '#4caf50' : pct > 0.25 ? '#e0a53f' : '#e05c5c';
+    ctx.fillStyle = c.boss ? '#f5c542' : pct > 0.5 ? '#4caf50' : pct > 0.25 ? '#e0a53f' : '#e05c5c';
     ctx.fillRect(bx, by, barW * pct, barH);
+
+    if (c.flying) {
+      ctx.fillStyle = '#dff6ff';
+      ctx.font = 'bold 8px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('AIR', c.x, c.y + r + 11);
+    }
+
+    const tags = [];
+    if (c.armour > 0) tags.push(`A${Math.round(c.armour)}`);
+    if (c.magicResist > 0) tags.push(`MR${Math.round(c.magicResist * 100)}`);
+    if (c.evasion) tags.push(`${Math.round(c.evasion * 100)}% EVA`);
+    if (c.physicalImmune) tags.push('PHYS IMMUNE');
+    if (c.magicImmune) tags.push('MAGIC IMMUNE');
+    if (c.disarmRadius) tags.push('DISARM');
+    if (c.regenPct) tags.push('REGEN');
+
+    if (hoveredCreepId === c.id && tags.length) {
+      ctx.fillStyle = '#fff';
+      ctx.font = '8px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(tags.join(' · '), c.x, by - 4);
+    }
   }
 
   drawCombatEffects(now);
@@ -1858,7 +2022,8 @@ function statLinesFromStats(s) {
     `Range ${s.range}`
   ];
 
-  if (s.trueDamage) parts.push('True damage');
+  if (s.damageType) parts.push(`${s.damageType === 'magic' ? 'Magic' : 'Physical'} damage`);
+  if (s.trueDamage) parts.push('True damage (ignores armour)');
   if (s.splashRadius) parts.push(`Splash ${s.splashRadius}`);
   if (s.maxTargets) parts.push(`Up to ${s.maxTargets} targets`);
   if (s.slowPct) parts.push(`${Math.round(s.slowPct * 100)}% slow / ${s.slowDur / 1000}s`);
@@ -1981,8 +2146,36 @@ function showTooltip(clientX, clientY, gemKey) {
   tip.style.top = `${top}px`;
 }
 
+function showCreepTooltip(clientX, clientY, creep) {
+  const tip = $('tooltip');
+  const lines = [
+    `<h3 style="color:${creep.colour}">${getCreepDisplayName(creep)} #${creep.id}${creep.flying ? ' · Flying' : ''}</h3>`,
+    `<div class="stats-line">HP ${Math.ceil(creep.hp)} / ${Math.ceil(creep.maxHp)}</div>`,
+    `<div class="stats-line">Armour ${creep.armour.toFixed(1)}</div>`,
+    `<div class="stats-line">Magic resistance ${Math.round(creep.magicResist * 100)}%</div>`
+  ];
+
+  if (creep.evasion) lines.push(`<div class="stats-line">Evasion ${Math.round(creep.evasion * 100)}%</div>`);
+  if (creep.physicalImmune) lines.push('<div class="stats-line">Physical immune</div>');
+  if (creep.magicImmune) lines.push('<div class="stats-line">Magic immune</div>');
+  if (creep.disarmRadius) lines.push(`<div class="stats-line">Disarm aura ${Math.round(creep.disarmRadius)}px</div>`);
+  if (creep.regenPct) lines.push(`<div class="stats-line">Regeneration ${Math.round(creep.regenPct * 1000) / 10}% max HP/s</div>`);
+
+  tip.innerHTML = lines.join('');
+  tip.style.display = 'block';
+
+  const appRect = document.querySelector('.app').getBoundingClientRect();
+  let left = clientX - appRect.left + 16;
+  let top = clientY - appRect.top + 16;
+
+  if (left + 260 > appRect.width) left = clientX - appRect.left - 266;
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+
 function hideTooltip() {
   hoveredGemKey = null;
+  hoveredCreepId = null;
   $('tooltip').style.display = 'none';
 }
 
@@ -2141,8 +2334,23 @@ canvas.addEventListener('mousemove', e => {
 
   if (gems.has(k)) {
     hoveredGemKey = k;
+    hoveredCreepId = null;
     showTooltip(e.clientX, e.clientY, k);
+    return;
+  }
+
+  hoveredGemKey = null;
+  const boardX = e.clientX - r.left;
+  const boardY = e.clientY - r.top;
+  const creep = [...activeCreeps].reverse().find(c =>
+    Math.hypot(c.x - boardX, c.y - boardY) <= cell * (c.boss ? .34 : .25)
+  );
+
+  if (creep) {
+    hoveredCreepId = creep.id;
+    showCreepTooltip(e.clientX, e.clientY, creep);
   } else {
+    hoveredCreepId = null;
     hideTooltip();
   }
 });
@@ -2262,6 +2470,10 @@ function loop(now) {
     } else {
       hideTooltip();
     }
+  } else if (hoveredCreepId !== null) {
+    const c = activeCreeps.find(c => c.id === hoveredCreepId);
+    if (c) showCreepTooltip(lastMouseClientX, lastMouseClientY, c);
+    else hideTooltip();
   }
 
   if (recipesOpen) {
