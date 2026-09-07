@@ -56,7 +56,8 @@
     font-family:inherit; color:#eee; cursor:pointer;
   }
   .gem-choice-card:hover { background:#242424; }
-  .gem-choice-name { font-weight:700; font-size:13px; }
+  .gem-choice-name { font-weight:700; font-size:13px; display:flex; align-items:center; gap:6px; }
+  .gem-choice-icon { font-size:16px; }
   .gem-choice-role { font-size:11px; color:#999; }
   .gem-choice-stats { font-size:11px; color:#bbb; margin-top:2px; }
   .gem-choice-card.combo-offer {
@@ -1772,7 +1773,14 @@ function renderGemChoicePanel() {
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'gem-choice-name';
-    nameSpan.textContent = `${lvlName} ${opt.type}`;
+
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'gem-choice-icon';
+    iconSpan.textContent = def.icon || opt.type[0];
+    iconSpan.style.color = def.colour;
+
+    nameSpan.appendChild(iconSpan);
+    nameSpan.appendChild(document.createTextNode(`${lvlName} ${opt.type}`));
 
     const roleSpan = document.createElement('span');
     roleSpan.className = 'gem-choice-role';
@@ -2280,7 +2288,6 @@ updateStats();
 setMessage("Click an empty cell to place a stone. Click a stone to select it for gem conversion.");
 
 requestAnimationFrame(loop);
-
 </script>
 </body>
 </html>
