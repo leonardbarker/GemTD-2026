@@ -14,6 +14,12 @@
   button { background:#292929; color:#eee; border:1px solid #555; border-radius:6px; padding:8px 12px; cursor:pointer; font-size:13px; }
   button:hover:not(:disabled) { background:#383838; }
   button:disabled { opacity:.4; cursor:not-allowed; }
+  button.armed { background:#c0392b; border-color:#e74c3c; color:#fff; animation:armedGlow 0.9s ease-in-out infinite; }
+  button.armed:hover:not(:disabled) { background:#d84a3a; }
+  @keyframes armedGlow {
+    0%, 100% { box-shadow:0 0 4px 1px rgba(231,76,60,.6); }
+    50% { box-shadow:0 0 12px 4px rgba(231,76,60,.9); }
+  }
   .stat { padding:7px 10px; border:1px solid #333; border-radius:6px; background:#191919; font-size:13px; }
   .layout { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
   .board-col { flex:1 1 480px; min-width:280px; position:relative; }
@@ -78,6 +84,7 @@
     <button id="newMap">New map</button>
     <button id="endTurn">End turn</button>
     <button id="startRound">Start round</button>
+    <button id="deleteStoneBtn">Delete stone</button>
     <button id="toggleRecipes">Combination recipes</button>
     <label class="stat" style="display:flex; gap:6px; align-items:center;">Difficulty
       <select id="difficulty"></select>
@@ -166,10 +173,12 @@
 
   // 3. State Variables
   let seed = 1, turn = 1, stonesLeft = 5;
+  let deleteArmed = false;
   let blocked = new Set();
   let points = [];
   let path = [];
   let pathPixels = [];
+  let airPixelPath = [];
 
   const $ = id => document.getElementById(id);
 
@@ -466,6 +475,10 @@
     path=fullPath();
     pathPixels=path ? toPixelPath(path) : [];
 
+    // Air-round creeps ignore the maze and fly straight waypoint to
+    // waypoint. Only depends on `points`, never on `blocked`.
+    airPixelPath = toPixelPath(points);
+
     $('pathLen').textContent =
       path ? path.length : 'BLOCKED';
 
@@ -477,6 +490,10 @@
   // ---------------------------------------------------------------------------
 
   function tryStone(x,y) {
+    if (deleteArmed) {
+      setDeleteArmed(false);
+    }
+
     if (gameOver) {
       setMessage("Game over - start a new map to play again.");
       return;
@@ -1040,6 +1057,7 @@
     pendingGemChoice=null;
     turnStonePlacements=[];
     stoneSelectionLocked=false;
+    setDeleteArmed(false);
 
     renderGemChoicePanel();
 
@@ -1141,7 +1159,17 @@ function buildRoundCreepType() {
 // ---------------------------------------------------------------------------
 
 function downgradeGem(key) {
-  if (gameOver || roundActive || !!pendingGemChoice) return;
+  if (gameOver) {
+    return setMessage("Game over - start a new map to play again.");
+  }
+
+  if (roundActive) {
+    return setMessage("Can't downgrade gems while a round is in progress.");
+  }
+
+  if (pendingGemChoice) {
+    return setMessage("Finish your current gem choice before downgrading.");
+  }
 
   const gem = gems.get(key);
   if (!gem) return;
@@ -1164,6 +1192,49 @@ function downgradeGem(key) {
   updateStats();
 }
 
+function setDeleteArmed(v) {
+  deleteArmed = v;
+  $('deleteStoneBtn').classList.toggle('armed', deleteArmed);
+}
+
+function deleteStone(k) {
+  if (gameOver) {
+    return setMessage("Game over - start a new map to play again.");
+  }
+
+  if (roundActive) {
+    return setMessage("Can't edit the maze while a round is in progress.");
+  }
+
+  if (pendingGemChoice) {
+    return setMessage("Pick one of the three offered gems first.");
+  }
+
+  if (!k || !blocked.has(k)) {
+    return setMessage("That's not a stone.");
+  }
+
+  const hadGem = gems.has(k);
+
+  blocked.delete(k);
+  gems.delete(k);
+  turnStonePlacements = turnStonePlacements.filter(tk => tk !== k);
+
+  if (selectedStone === k) selectedStone = null;
+  if (selectedGem && selectedGem.key === k) selectedGem = null;
+
+  setDeleteArmed(false);
+
+  const candidate = fullPath();
+  path = candidate;
+  pathPixels = candidate ? toPixelPath(candidate) : [];
+
+  setMessage(`Deleted ${hadGem ? 'gem and stone' : 'stone'} at ${k}.`);
+
+  updateStats();
+  draw();
+}
+
 function undoLastStone() {
   if (gameOver) {
     return setMessage("Game over - start a new map to play again.");
@@ -1183,6 +1254,8 @@ function undoLastStone() {
   }
 
   blocked.delete(k);
+  if (selectedStone === k) selectedStone = null;
+  setDeleteArmed(false);
 
   const candidate = fullPath();
   path = candidate;
@@ -1213,6 +1286,7 @@ function startRound() {
   roundActive = true;
   creepsToSpawn = 20;
   spawnedThisRound = 0;
+  setDeleteArmed(false);
 
   lastSpawnTime = performance.now() - SPAWN_INTERVAL_MS;
 
@@ -1224,6 +1298,10 @@ function startRound() {
     logEvent("⚠ Boss incoming. Expect a major HP spike.");
   }
 
+  if (wave.isAirRound) {
+    logEvent("🌬 Air round - every creep flies straight over your maze to the exit.");
+  }
+
   updateStats();
 }
 
@@ -1231,7 +1309,9 @@ function spawnOneCreep() {
   const typeName = buildRoundCreepType();
   const def = getCreepDefinition(typeName, round);
   const hp = baseCreepHp(round) * def.hpMult;
-  const start = pathPixels[0];
+  const isAirRound = getWaveDefinition(round).isAirRound;
+  const route = isAirRound ? airPixelPath : pathPixels;
+  const start = route[0];
 
   const creep = {
     id: nextCreepId++,
@@ -1247,7 +1327,8 @@ function spawnOneCreep() {
     speedMult: def.speed,
     armour: def.armour,
     magicResist: def.magicResist,
-    flying: !!def.flying,
+    flying: isAirRound ? true : !!def.flying,
+    airRoute: isAirRound,
     evasion: def.evasion || 0,
     physicalImmune: !!def.physicalImmune,
     magicImmune: !!def.magicImmune,
@@ -1343,10 +1424,11 @@ function updateCreeps(dt, now) {
       (slowed ? (1 - c.slowPct) : 1);
 
     let remaining = speed * (dt / 1000);
+    const route = c.airRoute ? airPixelPath : pathPixels;
 
-    while (remaining > 0 && c.segIndex < pathPixels.length - 1) {
-      const a = pathPixels[c.segIndex];
-      const b = pathPixels[c.segIndex + 1];
+    while (remaining > 0 && c.segIndex < route.length - 1) {
+      const a = route[c.segIndex];
+      const b = route[c.segIndex + 1];
 
       const segDX = b.x - a.x;
       const segDY = b.y - a.y;
@@ -1364,7 +1446,7 @@ function updateCreeps(dt, now) {
       }
     }
 
-    if (c.segIndex >= pathPixels.length - 1) {
+    if (c.segIndex >= route.length - 1) {
       const justEnded = loseLife();
 
       logEvent(`${getCreepDisplayName(c)} #${c.id} reached the exit. Lives: ${livesLeft}/${MAX_LIVES}.`);
@@ -1376,8 +1458,8 @@ function updateCreeps(dt, now) {
       continue;
     }
 
-    const a = pathPixels[c.segIndex];
-    const b = pathPixels[Math.min(c.segIndex + 1, pathPixels.length - 1)];
+    const a = route[c.segIndex];
+    const b = route[Math.min(c.segIndex + 1, route.length - 1)];
 
     c.x = a.x + (b.x - a.x) * c.segT;
     c.y = a.y + (b.y - a.y) * c.segT;
@@ -1951,6 +2033,20 @@ function draw(now = performance.now()) {
     if (sparkleKeys.has(k)) {
       drawSparkle(cx, cy, now);
     }
+  }
+
+  if (roundActive && getWaveDefinition(round).isAirRound && airPixelPath.length > 1) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(93,173,226,0.85)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    ctx.moveTo(airPixelPath[0].x, airPixelPath[0].y);
+    for (let i = 1; i < airPixelPath.length; i++) {
+      ctx.lineTo(airPixelPath[i].x, airPixelPath[i].y);
+    }
+    ctx.stroke();
+    ctx.restore();
   }
 
   points.forEach((p, i) => {
@@ -2565,7 +2661,6 @@ function renderRecipesPanel() {
     .map(c => {
       const { allOk, rows } = comboAvailability(c, counts);
       const def = COMBO_GEMS[c.name] || {};
-      const upgrade = COMBO_UPGRADES[c.name];
 
       let tierHtml = '';
       if (def.tiers) {
@@ -2574,12 +2669,6 @@ function renderRecipesPanel() {
             `${t.name}${t.upgradeCost != null ? ` (${t.upgradeCost}g to next)` : ' (max tier)'}`
           ).join(' &rarr; ')}
         </div>`;
-      } else if (upgrade) {
-        tierHtml = `<div class="recipe-upgrade">
-                       Upgrade: ${upgrade.name}
-                       ${upgrade.cost ? ` (${upgrade.cost}g)` : ''}
-                       — ${upgrade.effect}
-                     </div>`;
       }
 
       return `
@@ -2676,9 +2765,11 @@ function updateStats() {
     // Action: Downgrade button
     if (!selectedGem.isCombo && selectedGem.level > 0) {
       const lowerQuality = GEM_LEVELS[selectedGem.level - 1];
+      const canDowngrade = !gameOver && !roundActive && !pendingGemChoice;
       const downBtn = document.createElement('button');
-      downBtn.style.cssText = 'margin-left:8px; background:#e65100; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;';
+      downBtn.style.cssText = `margin-left:8px; background:${canDowngrade ? '#e65100' : '#555'}; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:${canDowngrade ? 'pointer' : 'not-allowed'};`;
       downBtn.textContent = `Downgrade (▼ ${lowerQuality})`;
+      downBtn.disabled = !canDowngrade;
       downBtn.addEventListener('click', () => downgradeGem(selectedGem.key));
       gemInfoEl.appendChild(downBtn);
     }
@@ -2809,6 +2900,35 @@ $('randomGem').onclick = offerGemChoices;
 $('removeStone').onclick = undoLastStone;
 $('startRound').onclick = startRound;
 
+$('deleteStoneBtn').onclick = () => {
+  if (gameOver) {
+    return setMessage("Game over - start a new map to play again.");
+  }
+
+  if (roundActive) {
+    return setMessage("Can't edit the maze while a round is in progress.");
+  }
+
+  if (pendingGemChoice) {
+    return setMessage("Pick one of the three offered gems first.");
+  }
+
+  const targetKey = selectedGem ? selectedGem.key : selectedStone;
+
+  if (!targetKey || !blocked.has(targetKey)) {
+    setDeleteArmed(false);
+    return setMessage("Select a stone or gem on the board first, then click Delete Stone.");
+  }
+
+  if (!deleteArmed) {
+    setDeleteArmed(true);
+    setMessage(`Click Delete Stone again to permanently remove the stone at ${targetKey}.`);
+    return;
+  }
+
+  deleteStone(targetKey);
+};
+
 $('toggleRecipes').onclick = () => recipesOpen ? closeRecipes() : openRecipes();
 $('closeRecipes').onclick = closeRecipes;
 
@@ -2835,6 +2955,7 @@ function generateNewMap() {
   pendingGemChoice = null;
   turnStonePlacements = [];
   stoneSelectionLocked = false;
+  setDeleteArmed(false);
 
   gems.clear();
   round = 0;
