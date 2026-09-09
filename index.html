@@ -201,6 +201,8 @@
       const def = COMBO_GEMS[gem.type] || {};
       const hexColor = def.colour || def.color || '#ff00ff';
       const tier = def.tiers ? def.tiers[gem.level || 0] : null;
+      const baseStats = tier || def.stats || {};
+      const stats = applyDamageBuff(gem, baseStats);
       return {
         name: tier ? tier.name : gem.type,
         color: hexColor,
@@ -208,7 +210,7 @@
         icon: def.icon || def.short || '💎',
         short: def.short || 'CB',
         role: def.role || 'Special',
-        stats: tier || def.stats || {},
+        stats,
         tier,
         tierCount: def.tiers ? def.tiers.length : 0,
         auraRadius: def.auraRadius || 0
@@ -219,6 +221,7 @@
     const def = GEM_TYPES[gem.type] || {};
     const hexColor = def.colour || def.color || '#ffffff';
     const quality = GEM_LEVELS[gem.level] || '';
+    const baseStats = (def.levels && def.levels[gem.level]) ? def.levels[gem.level] : {};
 
     return {
       name: `${quality} ${gem.type}`.trim(),
@@ -227,8 +230,27 @@
       icon: def.icon || gem.type[0] || '💎',
       short: gem.type[0] || 'G',
       role: def.role || 'Basic',
-      stats: (def.levels && def.levels[gem.level]) ? def.levels[gem.level] : {},
+      stats: applyDamageBuff(gem, baseStats),
       auraRadius: def.auraRadius || 0
+    };
+  }
+
+  // Black Opal's snapshot buff and Yellow Sapphire's continuous aura both
+  // scale a gem's damage range. Star Ruby opts out (ignoresBuffs). Snapshot
+  // (gem.damageBuffPct) always wins over the continuous aura, per the
+  // source game's "black opal will always override" rule.
+  function applyDamageBuff(gem, baseStats) {
+    if (!baseStats || (gem.isCombo && COMBO_GEMS[gem.type]?.tiers?.[gem.level || 0]?.ignoresBuffs)) {
+      return baseStats;
+    }
+
+    const pct = gem.damageBuffPct || gem._auraDamageBonus || 0;
+    if (!pct || baseStats.dmgMin == null) return baseStats;
+
+    return {
+      ...baseStats,
+      dmgMin: baseStats.dmgMin * (1 + pct),
+      dmgMax: baseStats.dmgMax * (1 + pct)
     };
   }
 
@@ -630,6 +652,35 @@
     return null;
   }
 
+  // Tourmaline needs 4 ingredients, so it can never come up through the
+  // normal 3-gem roll above. Special exception: if 3 of its 4 requirements
+  // match the rolled options, and the 4th requirement is already sitting on
+  // the board as a plain (non-combo) gem, treat it as a match - the board
+  // gem gets consumed alongside the roll when the player confirms.
+  function matchTourmalineException(options) {
+    const combo = COMBINATIONS.find(c => c.name === 'Tourmaline');
+    if (!combo || combo.requires.length !== options.length + 1) return null;
+
+    const rolled = options.map(o => `${GEM_LEVELS[o.level]} ${o.type}`).sort();
+
+    for (let omit = 0; omit < combo.requires.length; omit++) {
+      const rest = combo.requires
+        .filter((_, i) => i !== omit)
+        .map(r => `${r.q} ${r.t}`)
+        .sort();
+
+      if (!rest.every((v, i) => v === rolled[i])) continue;
+
+      const missingDesc = `${combo.requires[omit].q} ${combo.requires[omit].t}`;
+      const boardMatch = Array.from(gems.entries())
+        .find(([, g]) => !g.isCombo && `${GEM_LEVELS[g.level]} ${g.type}` === missingDesc);
+
+      if (boardMatch) return boardMatch[0];
+    }
+
+    return null;
+  }
+
   function offerGemChoices() {
     if (gameOver) {
       return setMessage(
@@ -668,17 +719,30 @@
     }
 
     const comboMatch=matchCombo(options);
+    let extraComboKey=null;
+    let finalComboMatch=comboMatch;
+
+    if (!finalComboMatch) {
+      const tourmalineKey=matchTourmalineException(options);
+      if (tourmalineKey) {
+        finalComboMatch='Tourmaline';
+        extraComboKey=tourmalineKey;
+      }
+    }
 
     pendingGemChoice={
       stoneKey:selectedStone,
       options,
-      comboMatch
+      comboMatch:finalComboMatch,
+      extraComboKey
     };
 
     setMessage(
-      comboMatch
-        ? `Pick one of the three gems - or combine all three into a ${comboMatch}!`
-        : "Pick one of the three gems to create at that stone."
+      extraComboKey
+        ? `Pick one of the three gems - or combine with your board's ${GEM_LEVELS[gems.get(extraComboKey).level]} ${gems.get(extraComboKey).type} into a Tourmaline!`
+        : finalComboMatch
+          ? `Pick one of the three gems - or combine all three into a ${finalComboMatch}!`
+          : "Pick one of the three gems to create at that stone."
     );
 
     renderGemChoicePanel();
@@ -842,6 +906,8 @@
 
     updateStats();
     draw();
+
+    startRound();
   }
 
   // Spend gold to advance a tiered combo gem (e.g. Malachite) to its next tier.
@@ -867,8 +933,26 @@
     gold -= currentTier.upgradeCost;
     gem.level = currentLevel + 1;
 
-    if (selectedGem && selectedGem.key === key) {
-      selectedGem.level = gem.level;
+    // Snapshot damage buff (Mystic Black Opal): applied once, only to towers
+    // already within radius at this exact moment. Towers placed afterwards,
+    // or moved into range later, get nothing - matches the source game.
+    if (nextTier.snapshotBuffPct) {
+      const [gx, gy] = key.split(',').map(Number);
+      const myPos = { x: (gx + .5) * cell, y: (gy + .5) * cell };
+      let buffed = 0;
+
+      for (const [ok, other] of gems) {
+        if (ok === key) continue;
+        const [ox, oy] = ok.split(',').map(Number);
+        const otherPos = { x: (ox + .5) * cell, y: (oy + .5) * cell };
+
+        if (Math.hypot(otherPos.x - myPos.x, otherPos.y - myPos.y) <= nextTier.snapshotBuffRadius) {
+          other.damageBuffPct = Math.max(other.damageBuffPct || 0, nextTier.snapshotBuffPct);
+          buffed++;
+        }
+      }
+
+      logEvent(`✨ Mystic Black Opal snapshot: +${Math.round(nextTier.snapshotBuffPct * 100)}% damage locked in for ${buffed} tower(s) in range.`);
     }
 
     logEvent(`⬆️ Upgraded ${currentTier.name} to ${nextTier.name} at ${key} (-${currentTier.upgradeCost}g).`);
@@ -885,8 +969,15 @@
 
     const {
       stoneKey,
-      comboMatch
+      comboMatch,
+      extraComboKey
     }=pendingGemChoice;
+
+    // Tourmaline exception: the 4th ingredient came from an existing board
+    // gem rather than the roll, so it's consumed here too.
+    if (extraComboKey) {
+      gems.delete(extraComboKey);
+    }
 
     gems.set(
       stoneKey,
@@ -912,7 +1003,9 @@
     pendingGemChoice=null;
 
     logEvent(
-      `${comboMatch} deployed at ${stoneKey}, combined from all three offered gems.`
+      extraComboKey
+        ? `${comboMatch} deployed at ${stoneKey}, combined from the roll plus the board gem at ${extraComboKey}.`
+        : `${comboMatch} deployed at ${stoneKey}, combined from all three offered gems.`
     );
 
     renderGemChoicePanel();
@@ -991,7 +1084,10 @@ function baseCreepHp(forRound) {
   const r = Math.max(1, forRound);
   const wave = getWaveDefinition(r);
 
-  return wave.hpBase * 0.85 * wave.hpScale * DIFFICULTIES[difficultyIndex].mult;
+  // Two stacked 15% reductions from the original curve (0.85 * 0.85 = 0.7225
+  // of the raw formula) - the second one added because creeps were still
+  // feeling too tanky at the first pass.
+  return wave.hpBase * 0.85 * 0.85 * wave.hpScale * DIFFICULTIES[difficultyIndex].mult;
 }
 
 function getKillBounty(forRound) {
@@ -1161,6 +1257,10 @@ function spawnOneCreep() {
     slowPct: 0,
     slowUntil: 0,
     poison: null,
+    burn: null,
+    stunUntil: 0,
+    armourReduction: 0,
+    auraArmourReduction: 0,
     disarmedUntil: 0,
     colour: def.color,
     radius: def.radius || 0.20
@@ -1216,6 +1316,14 @@ function updateCreeps(dt, now) {
       c.poison = null;
     }
 
+    // Burn (Ancient Blood Stone, Tourmaline's mana burst) is flat and
+    // unmitigated - applied directly to hp, bypassing armour/resist/evasion.
+    if (c.burn && now < c.burn.until) {
+      c.hp -= c.burn.dps * (dt / 1000);
+    } else if (c.burn && now >= c.burn.until) {
+      c.burn = null;
+    }
+
     // Regeneration is intentionally modest. It matters on long exposure,
     // but should not undo a tower's burst damage.
     if (c.regenPct > 0 && c.hp > 0 && c.hp < c.maxHp) {
@@ -1229,8 +1337,9 @@ function updateCreeps(dt, now) {
       continue;
     }
 
+    const stunned = c.stunUntil > now;
     const slowed = c.slowUntil > now;
-    const speed = BASE_CREEP_SPEED * GAME_SPEED * c.speedMult *
+    const speed = stunned ? 0 : BASE_CREEP_SPEED * GAME_SPEED * c.speedMult *
       (slowed ? (1 - c.slowPct) : 1);
 
     let remaining = speed * (dt / 1000);
@@ -1334,9 +1443,13 @@ function findTargets(px, py, range, maxTargets, gem = null) {
 
 function canGemHitCreep(gem, creep) {
   // All current gems remain able to target flying creeps. Flying is a
-  // positional/visual distinction for this prototype, not a hard counter.
-  // This avoids a dead build if a player reaches a flying round with an
-  // unlucky board.
+  // positional/visual distinction for this prototype, not a hard counter -
+  // except for gems explicitly flagged flyingOnly (Red Crystal), which can
+  // ONLY hit flying creeps, matching the source game.
+  if (gem && gem.isCombo) {
+    const def = COMBO_GEMS[gem.type];
+    if (def && def.flyingOnly) return !!creep.flying;
+  }
   return true;
 }
 
@@ -1356,30 +1469,24 @@ function mitigateDamage(creep, amount, damageType, trueDamage = false) {
   if (creep.physicalImmune) return 0;
   if (trueDamage) return amount;
 
-  const armour = Math.max(0, creep.armour || 0);
+  // Armour reduction (Gold/Red Crystal on-hit stacking, Tourmaline's
+  // continuous aura) can push effective armour negative, which amplifies
+  // damage - matches the "armour corruption" flavour of the source game.
+  // Floored at -9 so (armour + 10) never approaches zero.
+  const armour = Math.max(-9, (creep.armour || 0) - (creep.armourReduction || 0) - (creep.auraArmourReduction || 0));
   return amount * (1 - armour / (armour + 10));
 }
 
 function applyDamage(creep, amount, damageType = 'physical', opts = {}) {
-  if (!creep || creep.hp <= 0) return 0;
+  if (!creep || creep.hp <= 0) return { actual: 0, dodged: false };
 
   if (damageType === 'physical' && !opts.trueDamage && creep.evasion > 0 && rand() < creep.evasion) {
-    if (!opts.silent) {
-      pushEffect({
-        kind: 'damageText',
-        x: creep.x,
-        y: creep.y,
-        text: 'DODGE',
-        start: performance.now(),
-        life: 650
-      });
-    }
-    return 0;
+    return { actual: 0, dodged: true };
   }
 
   const actual = mitigateDamage(creep, amount, damageType, !!opts.trueDamage);
   creep.hp -= actual;
-  return actual;
+  return { actual, dodged: false };
 }
 
 function applySlow(creep, pct, durMs, now) {
@@ -1390,14 +1497,41 @@ function applySlow(creep, pct, durMs, now) {
   creep.slowUntil = Math.max(creep.slowUntil, now + durMs);
 }
 
+function applyStun(creep, durMs, now) {
+  creep.stunUntil = Math.max(creep.stunUntil, now + durMs);
+}
+
+// On-hit armour reduction (Gold, Red Crystal): stacks with each hit, capped
+// so it can't push effective armour below the -9 floor mitigateDamage uses.
+function applyArmourReductionHit(creep, amount) {
+  creep.armourReduction = Math.min(30, (creep.armourReduction || 0) + amount);
+}
+
+// Flat, unmitigated DoT (Ancient Blood Stone's burn, Tourmaline's mana
+// burst): bypasses armour, magic resist, evasion, buffs and kill scaling.
+// Keeps the stronger dps on refresh, but always extends duration - mirrors
+// applySlow's refresh logic below.
+function applyBurn(creep, totalDamage, durMs, now) {
+  const dps = totalDamage / (durMs / 1000);
+  const until = now + durMs;
+
+  if (!creep.burn || dps >= creep.burn.dps || now >= creep.burn.until) {
+    creep.burn = { dps, until };
+  } else {
+    creep.burn.until = Math.max(creep.burn.until, until);
+  }
+}
+
 function applyPoison(creep, dps, durMs, now) {
   // Poison is magic. Magic-immune creeps cannot receive it.
   if (creep.magicImmune) return;
 
   const until = now + durMs;
 
-  if (!creep.poison || dps >= creep.poison.dps || until > creep.poison.until) {
+  if (!creep.poison || dps >= creep.poison.dps || now >= creep.poison.until) {
     creep.poison = { dps, until };
+  } else {
+    creep.poison.until = Math.max(creep.poison.until, until);
   }
 }
 
@@ -1445,13 +1579,35 @@ function attackCreep(gemPos, gem, target, now, opts = {}) {
 
   const { stats, colour, name } = getGemStats(gem);
   const damageType = getGemDamageType(gem);
-  const dmg = Math.round(randRange(stats.dmgMin, stats.dmgMax));
-  const actual = applyDamage(target, dmg, damageType, {
+
+  let dmg = randRange(stats.dmgMin, stats.dmgMax);
+
+  // Star Ruby: permanent damage bonus per confirmed kill by this gem.
+  if (stats.killScalePct && gem.kills) {
+    dmg *= (1 + gem.kills * stats.killScalePct);
+  }
+
+  let note = '';
+  let crit = false;
+
+  if (stats.critChance && rand() < stats.critChance) {
+    dmg *= stats.critMult;
+    crit = true;
+  }
+
+  dmg = Math.round(dmg);
+
+  const { actual, dodged } = applyDamage(target, dmg, damageType, {
     trueDamage: !!stats.trueDamage,
     silent: !!opts.silent
   });
 
-  let note = ` (${damageType}${stats.trueDamage ? ', ignores armour' : ''})`;
+  note += ` (${damageType}${stats.trueDamage ? ', ignores armour' : ''})`;
+  if (crit) note += ` (CRIT x${stats.critMult})`;
+
+  if (target.hp <= 0 && !opts.isSplashHit) {
+    gem.kills = (gem.kills || 0) + 1;
+  }
 
   if (stats.poisonDps && target.hp > 0) {
     applyPoison(target, stats.poisonDps, stats.poisonDur, now);
@@ -1461,6 +1617,36 @@ function attackCreep(gemPos, gem, target, now, opts = {}) {
   if (stats.slowPct && target.hp > 0) {
     applySlow(target, stats.slowPct, stats.slowDur, now);
     note += ` (${Math.round(stats.slowPct * 100)}% slow)`;
+  }
+
+  if (stats.stunChance && target.hp > 0 && rand() < stats.stunChance) {
+    applyStun(target, stats.stunDur, now);
+    note += ` (stunned ${(stats.stunDur / 1000).toFixed(1)}s)`;
+  }
+
+  if (stats.armourReduction && target.hp > 0) {
+    applyArmourReductionHit(target, stats.armourReduction);
+    note += ` (-${stats.armourReduction} armour)`;
+  }
+
+  if (stats.goldOnHitChance && target.hp > 0 && rand() < stats.goldOnHitChance) {
+    const bonus = Math.floor(round / 2);
+    if (bonus > 0) {
+      awardGold(bonus, `${name} lucky strike`);
+    }
+  }
+
+  if (stats.burnChance && target.hp > 0 && rand() < stats.burnChance) {
+    applyBurn(target, stats.burnTotal, stats.burnDur, now);
+    note += ` (burn ${stats.burnTotal} over ${(stats.burnDur / 1000)}s)`;
+  }
+
+  // Mana-gated bonus burst (Tourmaline): spend mana on the attacking gem,
+  // not the target, so it only fires as often as the mana pool allows.
+  if (stats.manaCost && target.hp > 0 && (gem.mana || 0) >= stats.manaCost && rand() < stats.manaChance) {
+    gem.mana -= stats.manaCost;
+    applyBurn(target, stats.manaBurstTotal, stats.manaBurstDur, now);
+    note += ` (ability burst ${stats.manaBurstTotal} over ${(stats.manaBurstDur / 1000)}s)`;
   }
 
   if (stats.splashRadius && !opts.isSplashHit) {
@@ -1502,7 +1688,7 @@ function attackCreep(gemPos, gem, target, now, opts = {}) {
     kind: 'damageText',
     x: target.x,
     y: target.y,
-    text: actual > 0 ? `-${Math.round(actual)}` : (damageType === 'physical' && target.evasion ? 'DODGE' : 'IMMUNE'),
+    text: actual > 0 ? `-${Math.round(actual)}` : (dodged ? 'DODGE' : 'IMMUNE'),
     start: now,
     life: 650
   });
@@ -1512,42 +1698,89 @@ function attackCreep(gemPos, gem, target, now, opts = {}) {
   }
 }
 
-function updateTowers(now) {
-  if (gameOver || gems.size === 0 || activeCreeps.length === 0) {
+function updateTowers(now, dt = 16) {
+  if (gameOver || gems.size === 0) {
     return;
   }
 
-  const auraSources = [];
+  // Mana regen (Blood Stone, Tourmaline) runs even between attacks.
+  for (const [, gem] of gems) {
+    if (!gem.isCombo) continue;
+    const { stats } = getGemStats(gem);
+    if (!stats.manaRegen) continue;
+    gem.mana = Math.min(stats.manaCap || 10, (gem.mana || 0) + stats.manaRegen * (dt / 1000));
+  }
+
+  if (activeCreeps.length === 0) {
+    return;
+  }
+
+  const gemPositions = new Map();
+  for (const [k] of gems) {
+    const [gx, gy] = k.split(',').map(Number);
+    gemPositions.set(k, { x: (gx + .5) * cell, y: (gy + .5) * cell });
+  }
+
+  // Attack-speed aura sources (Opal) and damage-buff aura sources (Yellow
+  // Sapphire), collected once per frame.
+  const speedAuraSources = [];
+  const damageAuraSources = [];
 
   for (const [k, gem] of gems) {
     const { stats, auraRadius } = getGemStats(gem);
+    const pos = gemPositions.get(k);
 
-    if (!stats.auraPct) {
-      continue;
+    if (stats.auraPct) {
+      speedAuraSources.push({ pos, pct: stats.auraPct, radius: auraRadius });
     }
+    if (stats.auraDamagePct) {
+      damageAuraSources.push({ pos, pct: stats.auraDamagePct, radius: stats.auraRadius });
+    }
+  }
 
-    const [gx, gy] = k.split(',').map(Number);
+  // Reset then recompute the continuous damage-buff aura per tower. Black
+  // Opal's snapshot (gem.damageBuffPct) always overrides this, applied in
+  // getGemStats/applyDamageBuff, so it's fine to recompute unconditionally.
+  for (const [k, gem] of gems) {
+    const pos = gemPositions.get(k);
+    let bonus = 0;
+    for (const src of damageAuraSources) {
+      if (Math.hypot(src.pos.x - pos.x, src.pos.y - pos.y) <= src.radius) {
+        bonus = Math.max(bonus, src.pct);
+      }
+    }
+    gem._auraDamageBonus = bonus;
+  }
 
-    const pos = {
-      x: (gx + .5) * cell,
-      y: (gy + .5) * cell
-    };
-
-    auraSources.push({
-      pos,
-      pct: stats.auraPct,
-      radius: auraRadius
-    });
+  // Reset then recompute continuous creep-targeting auras: armour reduction
+  // (Tourmaline) and area slow (Uranium). Both are presence-based, not
+  // stacking, so they're just recalculated fresh every frame.
+  for (const c of activeCreeps) {
+    c.auraArmourReduction = 0;
   }
 
   for (const [k, gem] of gems) {
-    const [gx, gy] = k.split(',').map(Number);
+    const { stats } = getGemStats(gem);
+    if (!stats.auraArmourReduction && !stats.auraSlowPct) continue;
 
-    const pos = {
-      x: (gx + .5) * cell,
-      y: (gy + .5) * cell
-    };
+    const pos = gemPositions.get(k);
 
+    for (const c of activeCreeps) {
+      if (c.hp <= 0) continue;
+      if (Math.hypot(c.x - pos.x, c.y - pos.y) > stats.auraRadius) continue;
+      if (!canGemHitCreep(gem, c)) continue;
+
+      if (stats.auraArmourReduction) {
+        c.auraArmourReduction = Math.max(c.auraArmourReduction, stats.auraArmourReduction);
+      }
+      if (stats.auraSlowPct) {
+        applySlow(c, stats.auraSlowPct, 300, now);
+      }
+    }
+  }
+
+  for (const [k, gem] of gems) {
+    const pos = gemPositions.get(k);
     const { stats } = getGemStats(gem);
 
     if (isTowerDisarmed(pos, now)) {
@@ -1556,7 +1789,7 @@ function updateTowers(now) {
 
     let auraBonus = 0;
 
-    for (const o of auraSources) {
+    for (const o of speedAuraSources) {
       if (Math.hypot(o.pos.x - pos.x, o.pos.y - pos.y) <= o.radius) {
         auraBonus += o.pct;
       }
@@ -1763,7 +1996,6 @@ function draw(now = performance.now()) {
   for (const c of activeCreeps) {
     const slowed = c.slowUntil > now;
     const poisoned = !!c.poison;
-    const disarmed = c.disarmRadius > 0 && isTowerDisarmed({ x: c.x, y: c.y }, now);
     const r = cell * (c.boss ? 0.30 : c.radius);
 
     ctx.fillStyle = c.colour || (poisoned ? '#3f8f4f' : slowed ? '#3f6f9f' : '#222');
@@ -1831,6 +2063,11 @@ function draw(now = performance.now()) {
     if (c.magicImmune) tags.push('MAGIC IMMUNE');
     if (c.disarmRadius) tags.push('DISARM');
     if (c.regenPct) tags.push('REGEN');
+    if (c.stunUntil > now) tags.push('STUNNED');
+    if (c.armourReduction > 0 || c.auraArmourReduction > 0) {
+      tags.push(`-${Math.round((c.armourReduction || 0) + (c.auraArmourReduction || 0))} ARMOUR`);
+    }
+    if (c.burn) tags.push('BURNING');
 
     if (hoveredCreepId === c.id && tags.length) {
       ctx.fillStyle = '#fff';
@@ -1990,7 +2227,7 @@ function renderGemChoicePanel() {
   panel.style.display = 'block';
   panel.innerHTML = '';
 
-  const { options, comboMatch, stoneKey } = pendingGemChoice;
+  const { options, comboMatch, extraComboKey, stoneKey } = pendingGemChoice;
 
   // Header
   const title = document.createElement('h2');
@@ -2081,7 +2318,9 @@ function renderGemChoicePanel() {
 
     const roleSpan = document.createElement('span');
     roleSpan.className = 'gem-choice-role';
-    roleSpan.textContent = 'Combine all 3 rolled gems into a special recipe gem!';
+    roleSpan.textContent = extraComboKey
+      ? `Combine all 3 rolled gems with the board gem at ${extraComboKey}!`
+      : 'Combine all 3 rolled gems into a special recipe gem!';
 
     comboBtn.appendChild(nameSpan);
     comboBtn.appendChild(roleSpan);
@@ -2108,6 +2347,18 @@ function statLinesFromStats(s) {
   if (s.slowPct) parts.push(`${Math.round(s.slowPct * 100)}% slow / ${s.slowDur / 1000}s`);
   if (s.poisonDps) parts.push(`Poison ${s.poisonDps}/s / ${s.poisonDur / 1000}s`);
   if (s.auraPct) parts.push(`+${Math.round(s.auraPct * 100)}% attack speed aura`);
+  if (s.critChance) parts.push(`${Math.round(s.critChance * 100)}% chance to hit x${s.critMult} damage`);
+  if (s.stunChance) parts.push(`${Math.round(s.stunChance * 100)}% chance to stun ${s.stunDur / 1000}s`);
+  if (s.armourReduction) parts.push(`-${s.armourReduction} armour per hit (stacks)`);
+  if (s.auraArmourReduction) parts.push(`-${s.auraArmourReduction} armour aura, radius ${s.auraRadius}`);
+  if (s.auraSlowPct) parts.push(`${Math.round(s.auraSlowPct * 100)}% area slow, radius ${s.auraRadius}`);
+  if (s.auraDamagePct) parts.push(`+${Math.round(s.auraDamagePct * 100)}% damage aura, radius ${s.auraRadius}`);
+  if (s.snapshotBuffPct) parts.push(`On upgrade: +${Math.round(s.snapshotBuffPct * 100)}% damage to towers within ${s.snapshotBuffRadius} (one-time)`);
+  if (s.goldOnHitChance) parts.push(`${Math.round(s.goldOnHitChance * 100)}% chance for bonus gold on hit`);
+  if (s.burnChance) parts.push(`${Math.round(s.burnChance * 100)}% chance to burn for ${s.burnTotal} over ${s.burnDur / 1000}s`);
+  if (s.manaCost) parts.push(`Ability: ${Math.round(s.manaChance * 100)}% chance, ${s.manaCost} mana, ${s.manaBurstTotal} dmg over ${s.manaBurstDur / 1000}s (regen ${s.manaRegen}/s)`);
+  if (s.killScalePct) parts.push(`+${(s.killScalePct * 100).toFixed(1)}% damage per kill by this tower`);
+  if (s.ignoresBuffs) parts.push('Not affected by damage-buff auras');
 
   return parts;
 }
@@ -2243,6 +2494,11 @@ function showCreepTooltip(clientX, clientY, creep) {
   if (creep.magicImmune) lines.push('<div class="stats-line">Magic immune</div>');
   if (creep.disarmRadius) lines.push(`<div class="stats-line">Disarm aura ${Math.round(creep.disarmRadius)}px</div>`);
   if (creep.regenPct) lines.push(`<div class="stats-line">Regeneration ${Math.round(creep.regenPct * 1000) / 10}% max HP/s</div>`);
+  if (creep.stunUntil > performance.now()) lines.push('<div class="stats-line">Stunned</div>');
+  if ((creep.armourReduction || 0) + (creep.auraArmourReduction || 0) > 0) {
+    lines.push(`<div class="stats-line">Armour reduced by ${Math.round((creep.armourReduction || 0) + (creep.auraArmourReduction || 0))}</div>`);
+  }
+  if (creep.burn) lines.push('<div class="stats-line">Burning</div>');
 
   tip.innerHTML = lines.join('');
   tip.style.display = 'block';
@@ -2392,6 +2648,20 @@ function updateStats() {
   $('endTurn').disabled = gameOver || roundActive || !!pendingGemChoice;
   $('startRound').disabled = gameOver || roundActive || !!pendingGemChoice;
   $('difficulty').disabled = roundActive;
+
+  // selectedGem is a snapshot taken at selection time, separate from the
+  // object actually stored in `gems`. Several mechanics mutate the board
+  // object directly after selection (Black Opal's snapshot buff, Star
+  // Ruby's kill counter, mana pools, Yellow Sapphire's continuous aura) -
+  // resync here so the info panel doesn't show stale numbers.
+  if (selectedGem) {
+    const liveGem = gems.get(selectedGem.key);
+    if (liveGem) {
+      Object.assign(selectedGem, liveGem);
+    } else {
+      selectedGem = null;
+    }
+  }
 
   const gemInfoEl = $('gemInfo');
   gemInfoEl.innerHTML = '';
@@ -2619,7 +2889,7 @@ function loop(now) {
 
   updateSpawning(now);
   updateCreeps(dt, now);
-  updateTowers(now);
+  updateTowers(now, dt);
   updateEffects(now);
   draw(now);
   updateStats();
@@ -2643,9 +2913,13 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-// Attach UI-invoked functions globally for window compatibility
-window.downgradeGem = downgradeGem;
-window.removeStone = removeStone;
+// Note: no inline HTML onclick handlers reference these, and all buttons
+// are wired via addEventListener/.onclick above - window globals aren't
+// needed. (Previously this block also did `window.removeStone = removeStone`,
+// which referenced an undeclared variable - the actual function is
+// `undoLastStone` - and threw a ReferenceError that silently aborted the
+// rest of this script, including makeMap()/updateStats()/requestAnimationFrame()
+// below. Removed rather than "fixed" since nothing external depends on it.)
 
 // ---------------------------------------------------------------------------
 // Initialization
