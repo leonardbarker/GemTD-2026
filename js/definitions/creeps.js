@@ -218,8 +218,14 @@ function magicResistForRound(round, typeDef) {
   return Math.min(0.55, typeDef.magicResist + tier * 0.025);
 }
 
+const waveDefCache = new Map();
+
 export function getWaveDefinition(round) {
   const r = Math.max(1, Math.floor(round));
+
+  const cached = waveDefCache.get(r);
+  if (cached) return cached;
+
   const template = findTemplate(r);
   let types = buildTypes(template.weights, r, 20);
 
@@ -231,7 +237,7 @@ export function getWaveDefinition(round) {
   const cycleRound = ((r - 1) % 50) + 1;
   const hpScale = Math.pow(1.035, cycle) * Math.pow(1.095, Math.max(0, r - cycle * 50 - 1) / 10);
 
-  return {
+  const def = {
     round: r,
     label: r % 10 === 0 ? `Boss round ${r}` : `Round ${r}`,
     types,
@@ -243,6 +249,9 @@ export function getWaveDefinition(round) {
     cycle,
     cycleRound
   };
+
+  waveDefCache.set(r, def);
+  return def;
 }
 
 export function getCreepDefinition(typeName, round) {
