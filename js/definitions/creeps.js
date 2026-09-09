@@ -229,6 +229,17 @@ export function getWaveDefinition(round) {
   const template = findTemplate(r);
   let types = buildTypes(template.weights, r, 20);
 
+  // Every 5th round is a dedicated air round: every creep flies, bypassing
+  // the maze entirely and heading straight for the waypoints (handled in
+  // index.html's spawn/movement code via wave.isAirRound). Boss rounds
+  // (every 10th) still lead with a Boss creep - it flies too on the rounds
+  // where the two cycles overlap (10, 20, 30...).
+  const isAirRound = r % 5 === 0;
+
+  if (isAirRound) {
+    types = types.map(() => 'Flying');
+  }
+
   if (r % 10 === 0) {
     types[0] = 'Boss';
   }
@@ -239,8 +250,11 @@ export function getWaveDefinition(round) {
 
   const def = {
     round: r,
-    label: r % 10 === 0 ? `Boss round ${r}` : `Round ${r}`,
+    label: r % 10 === 0
+      ? (isAirRound ? `Boss round ${r} (Air)` : `Boss round ${r}`)
+      : (isAirRound ? `Round ${r} (Air)` : `Round ${r}`),
     types,
+    isAirRound,
     hpBase: 72 + 10.5 * (r - 1) + 0.8 * Math.pow(r - 1, 2),
     hpScale,
     armourScale: 1,
