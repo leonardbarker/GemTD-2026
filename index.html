@@ -2786,7 +2786,7 @@ function updateStats() {
         const upBtn = document.createElement('button');
         upBtn.style.cssText = `margin-left:8px; background:${canAfford ? '#2e7d32' : '#555'}; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:${canAfford ? 'pointer' : 'not-allowed'};`;
         upBtn.textContent = `Upgrade ➔ ${nextTier.name} (${currentTier.upgradeCost}g)`;
-        upBtn.disabled = !canAfford || roundActive;
+        upBtn.disabled = !canAfford;
         upBtn.addEventListener('click', () => upgradeComboGem(selectedGem.key));
         gemInfoEl.appendChild(upBtn);
       }
