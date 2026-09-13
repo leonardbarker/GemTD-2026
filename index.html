@@ -92,39 +92,28 @@
   #boardWrap { position:relative; overflow:hidden; border-radius:8px; }
   #boardWrap canvas { transform-origin:0 0; touch-action:none; }
 
-  /* Mobile mode: keep the board usable, with a collapsible controls panel below it. */
+  /* Mobile mode: keep the board primary, with a collapsible menu directly below it. */
   .mobile-fab {
-    display:none; width:100%; margin:10px 0 0; padding:11px 14px;
-    border-radius:8px; background:#292929; border:1px solid #555; font-size:14px;
-    align-items:center; justify-content:center; gap:8px;
+    display:none; width:min(96vw,760px); margin:10px auto 0; min-height:44px;
+    border-radius:8px; background:#292929; border:1px solid #555; font-size:16px;
+    align-items:center; justify-content:center; padding:8px 14px;
   }
   body.mobile-mode .mobile-fab { display:flex; }
-  body.mobile-mode .app { width:100vw; box-sizing:border-box; padding:8px; }
+  body.mobile-mode .app { width:100vw; padding:8px; }
   body.mobile-mode h1, body.mobile-mode > .app > p { display:none; }
-  body.mobile-mode #controlsRegion { display:block; }
-  body.mobile-mode #controlsRegion > .bar,
-  body.mobile-mode #controlsRegion > #message,
-  body.mobile-mode #controlsRegion > #gemChoicePanel { display:none; }
   body.mobile-mode #boardWrap {
     width:min(96vw,80vh); height:min(96vw,80vh); margin:4px auto;
   }
   body.mobile-mode .legend { display:none; }
-  body.mobile-mode .combat-log-panel { margin-top:10px; }
 
   .mobile-drawer {
-    display:none; position:static; width:100%; box-sizing:border-box;
-    background:#171717; border:1px solid #333; border-radius:8px;
-    overflow:hidden; padding:12px; margin-top:8px;
+    display:none; width:min(96vw,760px); margin:8px auto 0; background:#111;
+    border:1px solid #333; border-radius:8px; overflow:hidden; padding:12px;
   }
   .mobile-drawer.open { display:block; }
   .mobile-drawer-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
   .mobile-drawer-head h2 { margin:0; font-size:16px; }
-  body.mobile-mode .mobile-drawer #controlsRegion { display:block; }
-  body.mobile-mode .mobile-drawer #controlsRegion .bar { display:flex; }
-  body.mobile-mode .mobile-drawer #controlsRegion #message { display:block; }
-  body.mobile-mode .mobile-drawer #controlsRegion #gemChoicePanel { display:block; }
-  body.mobile-mode .mobile-drawer #controlsRegion h1,
-  body.mobile-mode .mobile-drawer #controlsRegion > p { display:none; }
+  body.mobile-mode #controlsRegion { width:100%; }
 </style>
 </head>
 <body>
@@ -190,7 +179,7 @@
     <ul id="log"></ul>
   </div>
 
-  <button id="mobileFab" class="mobile-fab" title="Menu">&#9776; <span>Open menu</span></button>
+  <button id="mobileFab" class="mobile-fab" title="Menu">☰ Menu</button>
   <div class="mobile-drawer" id="mobileDrawer">
     <div class="mobile-drawer-head">
       <h2>Menu</h2>
@@ -218,7 +207,7 @@
 
       <div class="start-checkbox-row">
         <input type="checkbox" id="startMobileMode">
-        <label for="startMobileMode">Mobile mode (large board, pinch to zoom, floating menu)</label>
+        <label for="startMobileMode">Mobile mode (large board, pinch to zoom, menu below the board)</label>
       </div>
 
       <button id="startGameBtn">Start Game</button>
@@ -3339,17 +3328,8 @@ $('startGameBtn').onclick = () => {
 // Mobile Drawer
 // ---------------------------------------------------------------------------
 
-$('mobileFab').onclick = () => {
-  const drawer = $('mobileDrawer');
-  const open = drawer.classList.toggle('open');
-  $('mobileFab').querySelector('span').textContent = open ? 'Close menu' : 'Open menu';
-  $('mobileFab').firstChild.textContent = open ? '× ' : '☰ ';
-};
-$('closeMobileDrawer').onclick = () => {
-  $('mobileDrawer').classList.remove('open');
-  $('mobileFab').querySelector('span').textContent = 'Open menu';
-  $('mobileFab').firstChild.textContent = '☰ ';
-};
+$('mobileFab').onclick = () => $('mobileDrawer').classList.add('open');
+$('closeMobileDrawer').onclick = () => $('mobileDrawer').classList.remove('open');
 
 // ---------------------------------------------------------------------------
 // Pinch-to-zoom and two-finger pan on the board (mobile mode)
