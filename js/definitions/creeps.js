@@ -160,9 +160,9 @@ export const WAVES = [
 ];
 
 export const DIFFICULTIES = [
-  { name: 'Easy',   mult: 0.8, startLives: 20 },
-  { name: 'Normal', mult: 1.0, startLives: 10 },
-  { name: 'Hard',   mult: 1.3, startLives: 5 }
+  { name: 'Easy',   mult: 0.8 },
+  { name: 'Normal', mult: 1.0 },
+  { name: 'Hard',   mult: 1.3 }
 ];
 
 const BOSS_ROUND_MULT = 4.6;
@@ -218,27 +218,10 @@ function magicResistForRound(round, typeDef) {
   return Math.min(0.55, typeDef.magicResist + tier * 0.025);
 }
 
-const waveDefCache = new Map();
-
 export function getWaveDefinition(round) {
   const r = Math.max(1, Math.floor(round));
-
-  const cached = waveDefCache.get(r);
-  if (cached) return cached;
-
   const template = findTemplate(r);
   let types = buildTypes(template.weights, r, 20);
-
-  // Every 5th round is a dedicated air round: every creep flies, bypassing
-  // the maze entirely and heading straight for the waypoints (handled in
-  // index.html's spawn/movement code via wave.isAirRound). Boss rounds
-  // (every 10th) still lead with a Boss creep - it flies too on the rounds
-  // where the two cycles overlap (10, 20, 30...).
-  const isAirRound = r % 5 === 0;
-
-  if (isAirRound) {
-    types = types.map(() => 'Flying');
-  }
 
   if (r % 10 === 0) {
     types[0] = 'Boss';
@@ -248,13 +231,10 @@ export function getWaveDefinition(round) {
   const cycleRound = ((r - 1) % 50) + 1;
   const hpScale = Math.pow(1.035, cycle) * Math.pow(1.095, Math.max(0, r - cycle * 50 - 1) / 10);
 
-  const def = {
+  return {
     round: r,
-    label: r % 10 === 0
-      ? (isAirRound ? `Boss round ${r} (Air)` : `Boss round ${r}`)
-      : (isAirRound ? `Round ${r} (Air)` : `Round ${r}`),
+    label: r % 10 === 0 ? `Boss round ${r}` : `Round ${r}`,
     types,
-    isAirRound,
     hpBase: 72 + 10.5 * (r - 1) + 0.8 * Math.pow(r - 1, 2),
     hpScale,
     armourScale: 1,
@@ -263,9 +243,6 @@ export function getWaveDefinition(round) {
     cycle,
     cycleRound
   };
-
-  waveDefCache.set(r, def);
-  return def;
 }
 
 export function getCreepDefinition(typeName, round) {
