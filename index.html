@@ -2706,6 +2706,42 @@ function closeRecipes() {
 // UI & Stats Update
 // ---------------------------------------------------------------------------
 
+// These are created once and reused - updateStats() only ever mutates their
+// text/style/disabled/display state. Previously this panel was torn down
+// and rebuilt from scratch on every animation frame (~60x/sec), which meant
+// a real click's mousedown target was very likely destroyed before mouseup
+// fired - per the DOM spec, if the mousedown element is removed from the
+// document before mouseup, no click event is dispatched at all. That made
+// Downgrade/Upgrade/Combine look clickable but silently do nothing.
+const gemInfoTitle = document.createElement('span');
+
+const gemDowngradeNote = document.createElement('span');
+gemDowngradeNote.style.cssText = 'margin-left:8px; color:#888; font-size:12px;';
+
+const gemDowngradeBtn = document.createElement('button');
+gemDowngradeBtn.style.marginLeft = '8px';
+gemDowngradeBtn.addEventListener('click', () => {
+  if (selectedGem) downgradeGem(selectedGem.key);
+});
+
+const gemUpgradeBtn = document.createElement('button');
+gemUpgradeBtn.style.marginLeft = '8px';
+gemUpgradeBtn.addEventListener('click', () => {
+  if (selectedGem) upgradeComboGem(selectedGem.key);
+});
+
+const gemCombineBtn = document.createElement('button');
+gemCombineBtn.style.cssText = 'margin-left:8px; background:#2e7d32; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;';
+gemCombineBtn.addEventListener('click', () => {
+  if (!selectedGem) return;
+  for (const combo of COMBINATIONS) {
+    if (findIngredientsForCombo(combo, selectedGem.key)) {
+      combineBoardGem(combo.name, selectedGem.key);
+      break;
+    }
+  }
+});
+
 function updateStats() {
   $('turn').textContent = turn;
   $('stones').textContent = stonesLeft;
@@ -2753,59 +2789,82 @@ function updateStats() {
   }
 
   const gemInfoEl = $('gemInfo');
-  gemInfoEl.innerHTML = '';
 
   if (selectedGem) {
     const info = getGemStats(selectedGem);
 
-    const titleSpan = document.createElement('span');
-    titleSpan.innerHTML = `<b>${info.name}</b> (${selectedGem.key})`;
-    gemInfoEl.appendChild(titleSpan);
-
-    // Action: Downgrade button
-    if (!selectedGem.isCombo && selectedGem.level > 0) {
-      const lowerQuality = GEM_LEVELS[selectedGem.level - 1];
-      const canDowngrade = !gameOver && !pendingGemChoice;
-      const downBtn = document.createElement('button');
-      downBtn.style.cssText = `margin-left:8px; background:${canDowngrade ? '#e65100' : '#555'}; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:${canDowngrade ? 'pointer' : 'not-allowed'};`;
-      downBtn.textContent = `Downgrade (▼ ${lowerQuality})`;
-      downBtn.disabled = !canDowngrade;
-      downBtn.addEventListener('click', () => downgradeGem(selectedGem.key));
-      gemInfoEl.appendChild(downBtn);
+    if (gemInfoTitle.parentNode !== gemInfoEl) {
+      gemInfoEl.textContent = '';
+      gemInfoEl.appendChild(gemInfoTitle);
+      gemInfoEl.appendChild(gemDowngradeNote);
+      gemInfoEl.appendChild(gemDowngradeBtn);
+      gemInfoEl.appendChild(gemUpgradeBtn);
+      gemInfoEl.appendChild(gemCombineBtn);
     }
 
-    // Action: Upgrade button (tiered combo gems, e.g. Malachite)
+    gemInfoTitle.innerHTML = `<b>${info.name}</b> (${selectedGem.key})`;
+
+    // Downgrade area - always shows something, so it's clear WHY it's
+    // unavailable rather than just silently missing (combo gem, or already
+    // at the lowest tier).
+    if (selectedGem.isCombo) {
+      gemDowngradeNote.textContent = 'Combination gems cannot be downgraded';
+      gemDowngradeNote.style.display = '';
+      gemDowngradeBtn.style.display = 'none';
+    } else if (selectedGem.level <= 0) {
+      gemDowngradeNote.textContent = 'Already Chipped - the lowest quality';
+      gemDowngradeNote.style.display = '';
+      gemDowngradeBtn.style.display = 'none';
+    } else {
+      const lowerQuality = GEM_LEVELS[selectedGem.level - 1];
+      const canDowngrade = !gameOver && !pendingGemChoice;
+      gemDowngradeNote.style.display = 'none';
+      gemDowngradeBtn.style.display = '';
+      gemDowngradeBtn.textContent = `Downgrade (▼ ${lowerQuality})`;
+      gemDowngradeBtn.disabled = !canDowngrade;
+      gemDowngradeBtn.style.background = canDowngrade ? '#e65100' : '#555';
+      gemDowngradeBtn.style.color = 'white';
+      gemDowngradeBtn.style.border = 'none';
+      gemDowngradeBtn.style.borderRadius = '3px';
+      gemDowngradeBtn.style.padding = '2px 6px';
+      gemDowngradeBtn.style.cursor = canDowngrade ? 'pointer' : 'not-allowed';
+    }
+
+    // Upgrade area (tiered combo gems, e.g. Malachite)
+    let showUpgrade = false;
     if (selectedGem.isCombo) {
       const comboDef = COMBO_GEMS[selectedGem.type];
       const currentTier = comboDef && comboDef.tiers ? comboDef.tiers[selectedGem.level || 0] : null;
 
       if (currentTier && currentTier.upgradeCost != null) {
+        showUpgrade = true;
         const nextTier = comboDef.tiers[(selectedGem.level || 0) + 1];
         const canAfford = gold >= currentTier.upgradeCost;
 
-        const upBtn = document.createElement('button');
-        upBtn.style.cssText = `margin-left:8px; background:${canAfford ? '#2e7d32' : '#555'}; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:${canAfford ? 'pointer' : 'not-allowed'};`;
-        upBtn.textContent = `Upgrade ➔ ${nextTier.name} (${currentTier.upgradeCost}g)`;
-        upBtn.disabled = !canAfford;
-        upBtn.addEventListener('click', () => upgradeComboGem(selectedGem.key));
-        gemInfoEl.appendChild(upBtn);
+        gemUpgradeBtn.textContent = `Upgrade ➔ ${nextTier.name} (${currentTier.upgradeCost}g)`;
+        gemUpgradeBtn.disabled = !canAfford;
+        gemUpgradeBtn.style.background = canAfford ? '#2e7d32' : '#555';
+        gemUpgradeBtn.style.color = 'white';
+        gemUpgradeBtn.style.border = 'none';
+        gemUpgradeBtn.style.borderRadius = '3px';
+        gemUpgradeBtn.style.padding = '2px 6px';
+        gemUpgradeBtn.style.cursor = canAfford ? 'pointer' : 'not-allowed';
       }
     }
+    gemUpgradeBtn.style.display = showUpgrade ? '' : 'none';
 
-    // Action: Combine button
+    // Combine area
+    let showCombine = false;
     if (!selectedGem.isCombo) {
       for (const combo of COMBINATIONS) {
-        const ingKeys = findIngredientsForCombo(combo, selectedGem.key);
-        if (ingKeys) {
-          const comboBtn = document.createElement('button');
-          comboBtn.style.cssText = 'margin-left:8px; background:#2e7d32; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;';
-          comboBtn.textContent = `Combine ➔ ${combo.name}`;
-          comboBtn.addEventListener('click', () => combineBoardGem(combo.name, selectedGem.key));
-          gemInfoEl.appendChild(comboBtn);
+        if (findIngredientsForCombo(combo, selectedGem.key)) {
+          showCombine = true;
+          gemCombineBtn.textContent = `Combine ➔ ${combo.name}`;
           break;
         }
       }
     }
+    gemCombineBtn.style.display = showCombine ? '' : 'none';
   } else {
     gemInfoEl.textContent = selectedStone ? `Selected stone for conversion: ${selectedStone}` : 'None';
   }
