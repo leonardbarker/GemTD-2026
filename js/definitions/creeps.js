@@ -240,6 +240,9 @@ export function getWaveDefinition(round) {
     armourScale: 1,
     magicResistScale: 1,
     bossHpMult: BOSS_ROUND_MULT,
+    // Every 5th round is a dedicated air round. The combat loop uses this
+    // flag to send every creep along the straight waypoint-to-waypoint route.
+    isAirRound: r % 5 === 0,
     cycle,
     cycleRound
   };
