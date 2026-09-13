@@ -92,28 +92,39 @@
   #boardWrap { position:relative; overflow:hidden; border-radius:8px; }
   #boardWrap canvas { transform-origin:0 0; touch-action:none; }
 
-  /* Mobile mode: hide the normal control layout, show a floating menu button instead */
+  /* Mobile mode: keep the board usable, with a collapsible controls panel below it. */
   .mobile-fab {
-    display:none; position:fixed; bottom:18px; right:18px; width:58px; height:58px;
-    border-radius:50%; background:#292929; border:2px solid #555; font-size:24px;
-    align-items:center; justify-content:center; z-index:500; box-shadow:0 4px 14px rgba(0,0,0,.6);
-    padding:0;
+    display:none; width:100%; margin:10px 0 0; padding:11px 14px;
+    border-radius:8px; background:#292929; border:1px solid #555; font-size:14px;
+    align-items:center; justify-content:center; gap:8px;
   }
   body.mobile-mode .mobile-fab { display:flex; }
-  body.mobile-mode .app { width:100vw; padding:8px; }
+  body.mobile-mode .app { width:100vw; box-sizing:border-box; padding:8px; }
   body.mobile-mode h1, body.mobile-mode > .app > p { display:none; }
+  body.mobile-mode #controlsRegion { display:block; }
+  body.mobile-mode #controlsRegion > .bar,
+  body.mobile-mode #controlsRegion > #message,
+  body.mobile-mode #controlsRegion > #gemChoicePanel { display:none; }
   body.mobile-mode #boardWrap {
     width:min(96vw,80vh); height:min(96vw,80vh); margin:4px auto;
   }
   body.mobile-mode .legend { display:none; }
+  body.mobile-mode .combat-log-panel { margin-top:10px; }
 
   .mobile-drawer {
-    display:none; position:fixed; inset:0; background:rgba(8,8,8,.97); z-index:600;
-    overflow-y:auto; padding:16px;
+    display:none; position:static; width:100%; box-sizing:border-box;
+    background:#171717; border:1px solid #333; border-radius:8px;
+    overflow:hidden; padding:12px; margin-top:8px;
   }
   .mobile-drawer.open { display:block; }
   .mobile-drawer-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
   .mobile-drawer-head h2 { margin:0; font-size:16px; }
+  body.mobile-mode .mobile-drawer #controlsRegion { display:block; }
+  body.mobile-mode .mobile-drawer #controlsRegion .bar { display:flex; }
+  body.mobile-mode .mobile-drawer #controlsRegion #message { display:block; }
+  body.mobile-mode .mobile-drawer #controlsRegion #gemChoicePanel { display:block; }
+  body.mobile-mode .mobile-drawer #controlsRegion h1,
+  body.mobile-mode .mobile-drawer #controlsRegion > p { display:none; }
 </style>
 </head>
 <body>
@@ -179,7 +190,7 @@
     <ul id="log"></ul>
   </div>
 
-  <button id="mobileFab" class="mobile-fab" title="Menu">&#9776;</button>
+  <button id="mobileFab" class="mobile-fab" title="Menu">&#9776; <span>Open menu</span></button>
   <div class="mobile-drawer" id="mobileDrawer">
     <div class="mobile-drawer-head">
       <h2>Menu</h2>
@@ -3328,8 +3339,17 @@ $('startGameBtn').onclick = () => {
 // Mobile Drawer
 // ---------------------------------------------------------------------------
 
-$('mobileFab').onclick = () => $('mobileDrawer').classList.add('open');
-$('closeMobileDrawer').onclick = () => $('mobileDrawer').classList.remove('open');
+$('mobileFab').onclick = () => {
+  const drawer = $('mobileDrawer');
+  const open = drawer.classList.toggle('open');
+  $('mobileFab').querySelector('span').textContent = open ? 'Close menu' : 'Open menu';
+  $('mobileFab').firstChild.textContent = open ? '× ' : '☰ ';
+};
+$('closeMobileDrawer').onclick = () => {
+  $('mobileDrawer').classList.remove('open');
+  $('mobileFab').querySelector('span').textContent = 'Open menu';
+  $('mobileFab').firstChild.textContent = '☰ ';
+};
 
 // ---------------------------------------------------------------------------
 // Pinch-to-zoom and two-finger pan on the board (mobile mode)
