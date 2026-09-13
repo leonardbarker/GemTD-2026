@@ -27,10 +27,13 @@
   #message { min-height:22px; margin:10px 0; color:#ccc; font-size:13px; }
   .legend { font-size:12px; color:#999; margin-top:6px; }
   .legend span { margin-right:14px; }
-  .side-col { flex:0 0 280px; min-width:240px; display:flex; flex-direction:column; gap:12px; }
   .panel { border:1px solid #333; border-radius:8px; background:#171717; padding:10px 12px; }
   .panel h2 { font-size:13px; margin:0 0 8px; color:#ddd; text-transform:none; }
-  #log { list-style:none; margin:0; padding:0; max-height:220px; overflow-y:auto; font-size:12px; color:#bbb; display:flex; flex-direction:column-reverse; gap:3px; }
+  .combat-log-panel { margin-top:16px; }
+  .combat-log-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .combat-log-panel.closed #log { display:none; }
+  .combat-log-panel.closed .combat-log-empty { display:none; }
+  #log { list-style:none; margin:0; padding:0; max-height:220px; overflow-y:auto; font-size:12px; color:#bbb; display:flex; flex-direction:column; gap:3px; }
   #log li { border-bottom:1px dashed #2a2a2a; padding-bottom:3px; }
   .tooltip {
     position:absolute; pointer-events:none; background:#1b1b1b; border:1px solid #555; border-radius:8px;
@@ -125,6 +128,7 @@
       <button id="startRound">Start round</button>
       <button id="deleteStoneBtn">Delete stone</button>
       <button id="toggleRecipes">Combination recipes</button>
+      <button id="toggleLog">Combat log</button>
       <label class="stat" style="display:flex; gap:6px; align-items:center;">Difficulty
         <select id="difficulty"></select>
       </label>
@@ -134,8 +138,9 @@
       <div class="stat">Gem: <b id="gemStatus">Available</b></div>
       <div class="stat">Round: <b id="round">0</b></div>
       <div class="stat">Creeps: <b id="creepsLeft">0</b>/20</div>
-      <div class="stat">Lives: <b id="lives">20</b>/20</div>
+      <div class="stat">Lives: <b id="lives">20</b></div>
       <div class="stat">Gold: <b id="gold">10</b></div>
+      <button id="buyLifeBtn">Buy life (10g)</button>
       <div class="stat">Seed: <b id="seed"></b></div>
     </div>
 
@@ -147,14 +152,7 @@
 
     <div id="message">Click an empty cell to place a stone.</div>
 
-    <div class="side-col">
-      <div class="panel" id="gemChoicePanel" style="display:none;"></div>
-
-      <div class="panel">
-        <h2>Combat log</h2>
-        <ul id="log"></ul>
-      </div>
-    </div>
+    <div class="panel" id="gemChoicePanel" style="display:none;"></div>
   </div>
 
   <div class="layout">
@@ -171,6 +169,14 @@
         <span>&#8226; Creep path</span>
       </div>
     </div>
+  </div>
+
+  <div class="panel combat-log-panel closed" id="combatLogPanel">
+    <div class="combat-log-head">
+      <h2 style="margin:0;">Combat log</h2>
+      <button id="toggleLogBottom">Open</button>
+    </div>
+    <ul id="log"></ul>
   </div>
 
   <button id="mobileFab" class="mobile-fab" title="Menu">&#9776;</button>
@@ -361,8 +367,9 @@
 
   const GAME_SPEED = 2;
 
-  let MAX_LIVES = 20;
-  let livesLeft = MAX_LIVES;
+  const STARTING_LIVES = 20;
+  let livesLeft = STARTING_LIVES;
+  let livesBought = 0;
   let gold = 10;
   let gameOver = false;
 
@@ -1008,6 +1015,38 @@
     }
   }
 
+  // Spend gold to upgrade either a standard gem's quality or a combo gem's tier.
+  function upgradeGemWithGold(key) {
+    const gem = gems.get(key);
+    if (!gem) return;
+
+    if (gem.isCombo) {
+      upgradeComboGem(key);
+      return;
+    }
+
+    if (gameOver) return setMessage('Game over - start a new map to play again.');
+    if (pendingGemChoice) return setMessage('Finish your current gem choice before upgrading.');
+
+    const currentLevel = gem.level || 0;
+    if (currentLevel >= GEM_LEVELS.length - 1) {
+      return setMessage(`${gem.type} is already Perfect.`);
+    }
+
+    // 10 / 20 / 30 / 40g for Chipped -> Flawed -> Normal -> Flawless -> Perfect.
+    const cost = 10 * (currentLevel + 1);
+    if (gold < cost) {
+      return setMessage(`Not enough gold - ${GEM_LEVELS[currentLevel + 1]} upgrade costs ${cost}g.`);
+    }
+
+    gold -= cost;
+    gem.level = currentLevel + 1;
+    logEvent(`⬆️ Upgraded ${gem.type} to ${GEM_LEVELS[gem.level]} (-${cost}g). Gold: ${gold}`);
+    setMessage(`Upgraded ${gem.type} to ${GEM_LEVELS[gem.level]} for ${cost}g.`);
+    updateStats();
+    draw();
+  }
+
   // Spend gold to advance a tiered combo gem (e.g. Malachite) to its next tier.
   function upgradeComboGem(key) {
     const gem = gems.get(key);
@@ -1167,7 +1206,8 @@ function resetCombat() {
   effects = [];
   nextCreepId = 1;
 
-  livesLeft = MAX_LIVES;
+  livesLeft = STARTING_LIVES;
+  livesBought = 0;
   gold = 10;
   gameOver = false;
 
@@ -1191,9 +1231,33 @@ function baseCreepHp(forRound) {
 }
 
 function getKillBounty(forRound) {
-  // Classic-style base bounty: early waves scale gradually, then settle at 25 gold.
+  // Each creep pays a small bounty that rises as rounds become harder.
+  // Round 1-5: 1g, 6-10: 2g, 11-15: 3g, etc.
   const r = Math.max(1, forRound);
-  return r <= 40 ? Math.floor(r / 4) + 1 : 25;
+  return 1 + Math.floor((r - 1) / 5);
+}
+
+function getLifeCost() {
+  // Every purchased life costs more than the previous one.
+  return 10 + (livesBought * 5);
+}
+
+function buyLife() {
+  if (gameOver) return setMessage('Game over - start a new map to play again.');
+  if (roundActive) return setMessage('You cannot buy lives while a round is active.');
+  if (pendingGemChoice) return setMessage('Finish your current gem choice before buying a life.');
+
+  const cost = getLifeCost();
+  if (gold < cost) {
+    return setMessage(`Not enough gold - the next life costs ${cost}g.`);
+  }
+
+  gold -= cost;
+  livesLeft += 1;
+  livesBought += 1;
+  logEvent(`❤️ Bought 1 life for ${cost} gold. Lives: ${livesLeft}. Gold: ${gold}`);
+  setMessage(`Bought 1 life for ${cost}g.`);
+  updateStats();
 }
 
 function awardGold(amount, reason) {
@@ -1451,7 +1515,7 @@ function updateSpawning(now) {
     logEvent(`— Round ${round} complete —`);
 
     if (!gameOver) {
-      const waveReward = 5 + (2 * round);
+      const waveReward = 2 * round;
       awardGold(waveReward, `Round ${round} completion`);
       performEndTurn(true);
     }
@@ -1527,7 +1591,7 @@ function updateCreeps(dt, now) {
     if (c.segIndex >= route.length - 1) {
       const justEnded = loseLife();
 
-      logEvent(`${getCreepDisplayName(c)} #${c.id} reached the exit. Lives: ${livesLeft}/${MAX_LIVES}.`);
+      logEvent(`${getCreepDisplayName(c)} #${c.id} reached the exit. Lives: ${livesLeft}.`);
 
       if (justEnded) {
         logEvent("— Game over: out of lives —");
@@ -1789,11 +1853,18 @@ function attackCreep(gemPos, gem, target, now, opts = {}) {
     note += ` (-${stats.armourReduction} armour)`;
   }
 
-  if (stats.goldOnHitChance && target.hp > 0 && rand() < stats.goldOnHitChance) {
-    const bonus = Math.floor(round / 2);
+  if (stats.goldOnHitChance && rand() < stats.goldOnHitChance) {
+    const bonus = stats.goldBonusAmount != null
+      ? stats.goldBonusAmount
+      : Math.floor(round / 2);
     if (bonus > 0) {
       awardGold(bonus, `${name} lucky strike`);
     }
+  }
+
+  if (stats.goldBonusChance && rand() < stats.goldBonusChance) {
+    awardGold(stats.goldBonusAmount || 100, `${name} generated bonus gold`);
+    note += ` (+${stats.goldBonusAmount || 100} gold)`;
   }
 
   if (stats.burnChance && target.hp > 0 && rand() < stats.burnChance) {
@@ -2529,6 +2600,7 @@ function statLinesFromStats(s) {
   if (s.auraDamagePct) parts.push(`+${Math.round(s.auraDamagePct * 100)}% damage aura, radius ${s.auraRadius}`);
   if (s.snapshotBuffPct) parts.push(`On upgrade: +${Math.round(s.snapshotBuffPct * 100)}% damage to towers within ${s.snapshotBuffRadius} (one-time)`);
   if (s.goldOnHitChance) parts.push(`${Math.round(s.goldOnHitChance * 100)}% chance for bonus gold on hit`);
+  if (s.goldBonusChance) parts.push(`${Math.round(s.goldBonusChance * 100)}% chance for +${s.goldBonusAmount || 100} gold`);
   if (s.burnChance) parts.push(`${Math.round(s.burnChance * 100)}% chance to burn for ${s.burnTotal} over ${s.burnDur / 1000}s`);
   if (s.manaCost) parts.push(`Ability: ${Math.round(s.manaChance * 100)}% chance, ${s.manaCost} mana, ${s.manaBurstTotal} dmg over ${s.manaBurstDur / 1000}s (regen ${s.manaRegen}/s)`);
   if (s.killScalePct) parts.push(`+${(s.killScalePct * 100).toFixed(1)}% damage per kill by this tower`);
@@ -2805,7 +2877,7 @@ gemDowngradeBtn.addEventListener('click', () => {
 const gemUpgradeBtn = document.createElement('button');
 gemUpgradeBtn.style.marginLeft = '8px';
 gemUpgradeBtn.addEventListener('click', () => {
-  if (selectedGem) upgradeComboGem(selectedGem.key);
+  if (selectedGem) upgradeGemWithGold(selectedGem.key);
 });
 
 const gemCombineBtn = document.createElement('button');
@@ -2831,6 +2903,11 @@ function updateStats() {
   $('creepsLeft').textContent = `${activeCreeps.length + Math.max(0, creepsToSpawn - spawnedThisRound)}`;
   $('lives').textContent = livesLeft;
   $('gold').textContent = gold;
+
+  const buyLifeBtn = $('buyLifeBtn');
+  const lifeCost = getLifeCost();
+  buyLifeBtn.textContent = `Buy life (${lifeCost}g)`;
+  buyLifeBtn.disabled = gameOver || roundActive || !!pendingGemChoice || gold < lifeCost;
 
   $('randomGem').disabled =
     gameOver ||
@@ -2908,26 +2985,37 @@ function updateStats() {
       gemDowngradeBtn.style.cursor = canDowngrade ? 'pointer' : 'not-allowed';
     }
 
-    // Upgrade area (tiered combo gems, e.g. Malachite)
+    // Upgrade area. Standard gems can buy the next quality tier with gold;
+    // combo gems use their own tier-specific upgrade costs.
     let showUpgrade = false;
+    let upgradeCost = null;
+    let nextUpgradeName = '';
+
     if (selectedGem.isCombo) {
       const comboDef = COMBO_GEMS[selectedGem.type];
       const currentTier = comboDef && comboDef.tiers ? comboDef.tiers[selectedGem.level || 0] : null;
-
-      if (currentTier && currentTier.upgradeCost != null) {
+      const nextTier = comboDef && comboDef.tiers ? comboDef.tiers[(selectedGem.level || 0) + 1] : null;
+      if (currentTier && nextTier && currentTier.upgradeCost != null) {
         showUpgrade = true;
-        const nextTier = comboDef.tiers[(selectedGem.level || 0) + 1];
-        const canAfford = gold >= currentTier.upgradeCost;
-
-        gemUpgradeBtn.textContent = `Upgrade ➔ ${nextTier.name} (${currentTier.upgradeCost}g)`;
-        gemUpgradeBtn.disabled = !canAfford;
-        gemUpgradeBtn.style.background = canAfford ? '#2e7d32' : '#555';
-        gemUpgradeBtn.style.color = 'white';
-        gemUpgradeBtn.style.border = 'none';
-        gemUpgradeBtn.style.borderRadius = '3px';
-        gemUpgradeBtn.style.padding = '2px 6px';
-        gemUpgradeBtn.style.cursor = canAfford ? 'pointer' : 'not-allowed';
+        upgradeCost = currentTier.upgradeCost;
+        nextUpgradeName = nextTier.name;
       }
+    } else if (selectedGem.level < GEM_LEVELS.length - 1) {
+      showUpgrade = true;
+      upgradeCost = 10 * (selectedGem.level + 1);
+      nextUpgradeName = GEM_LEVELS[selectedGem.level + 1];
+    }
+
+    if (showUpgrade) {
+      const canAfford = gold >= upgradeCost && !gameOver && !pendingGemChoice;
+      gemUpgradeBtn.textContent = `Upgrade ➔ ${nextUpgradeName} (${upgradeCost}g)`;
+      gemUpgradeBtn.disabled = !canAfford;
+      gemUpgradeBtn.style.background = canAfford ? '#2e7d32' : '#555';
+      gemUpgradeBtn.style.color = 'white';
+      gemUpgradeBtn.style.border = 'none';
+      gemUpgradeBtn.style.borderRadius = '3px';
+      gemUpgradeBtn.style.padding = '2px 6px';
+      gemUpgradeBtn.style.cursor = canAfford ? 'pointer' : 'not-allowed';
     }
     gemUpgradeBtn.style.display = showUpgrade ? '' : 'none';
 
@@ -3011,7 +3099,7 @@ const difficultySelect = $('difficulty');
 DIFFICULTIES.forEach((d, i) => {
   const opt = document.createElement('option');
   opt.value = i;
-  opt.textContent = `${d.name} (${Math.round(d.mult * 100)}% HP)`;
+  opt.textContent = `${d.name} (${Math.round(d.mult * 100)}% creep HP)`;
   difficultySelect.appendChild(opt);
 });
 
@@ -3036,6 +3124,7 @@ $('endTurn').onclick = endTurn;
 $('randomGem').onclick = offerGemChoices;
 $('removeStone').onclick = undoLastStone;
 $('startRound').onclick = startRound;
+$('buyLifeBtn').onclick = buyLife;
 
 $('deleteStoneBtn').onclick = () => {
   if (gameOver) {
@@ -3068,6 +3157,22 @@ $('deleteStoneBtn').onclick = () => {
 
 $('toggleRecipes').onclick = () => recipesOpen ? closeRecipes() : openRecipes();
 $('closeRecipes').onclick = closeRecipes;
+
+function setCombatLogOpen(open) {
+  const panel = $('combatLogPanel');
+  panel.classList.toggle('closed', !open);
+  $('toggleLogBottom').textContent = open ? 'Close' : 'Open';
+}
+
+$('toggleLog').onclick = () => {
+  const panel = $('combatLogPanel');
+  setCombatLogOpen(panel.classList.contains('closed'));
+};
+
+$('toggleLogBottom').onclick = () => {
+  const panel = $('combatLogPanel');
+  setCombatLogOpen(panel.classList.contains('closed'));
+};
 
 $('recipesModal').addEventListener('click', e => {
   if (e.target.id === 'recipesModal') {
@@ -3102,7 +3207,8 @@ function generateNewMap() {
   activeCreeps = [];
   effects = [];
   nextCreepId = 1;
-  livesLeft = MAX_LIVES;
+  livesLeft = STARTING_LIVES;
+  livesBought = 0;
   gold = 10;
   gameOver = false;
   combatLogEntries = [];
@@ -3188,7 +3294,7 @@ const startDifficultySelect = $('startDifficulty');
 DIFFICULTIES.forEach((d, i) => {
   const opt = document.createElement('option');
   opt.value = i;
-  opt.textContent = `${d.name} (${Math.round(d.mult * 100)}% HP, ${d.startLives} lives)`;
+  opt.textContent = `${d.name} (${Math.round(d.mult * 100)}% creep HP)`;
   startDifficultySelect.appendChild(opt);
 });
 
@@ -3318,8 +3424,8 @@ function beginGame() {
   seed = Date.now() >>> 0;
   rand = rngFactory(seed);
 
-  MAX_LIVES = DIFFICULTIES[difficultyIndex].startLives;
-  livesLeft = MAX_LIVES;
+  livesLeft = STARTING_LIVES;
+  livesBought = 0;
 
   makeMap();
   updateStats();
