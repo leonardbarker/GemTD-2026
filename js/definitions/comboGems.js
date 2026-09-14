@@ -452,27 +452,76 @@ export const RECIPES = {
   // entry above).
 };
 
-// Kept as empty stubs so the existing (old-system) engine code in
-// index.html - which still imports COMBINATIONS/COMBO_UPGRADES and expects
-// the old "3 base gems -> 1 combo" shape - doesn't throw on import while
-// this is mid-migration. With COMBINATIONS empty, the old crafting UI will
-// simply never find a match, which is the expected/safe state until the
-// engine is rewired against RECIPES above.
-export const COMBINATIONS = [];
+// ---------------------------------------------------------------------------
+// Letter / quality mapping for recipe codes (e.g. 'B1' = Chipped Sapphire)
+// Digit 1-5 map to GEM_LEVELS[0..4]. Digit 6 is treated as Perfect (index 4)
+// because this engine only has 5 quality tiers.
+// ---------------------------------------------------------------------------
+export const CODE_LETTER_TO_TYPE = {
+  B: 'Sapphire',
+  D: 'Diamond',
+  E: 'Opal',
+  G: 'Emerald',
+  P: 'Amethyst',
+  Q: 'Aquamarine',
+  R: 'Ruby',
+  Y: 'Topaz'
+};
+
+export function parseIngredientCode(code) {
+  if (typeof code !== 'string' || code.length < 2) return null;
+  const letter = code[0];
+  const digit = parseInt(code.slice(1), 10);
+  const type = CODE_LETTER_TO_TYPE[letter];
+  if (!type || isNaN(digit)) return null;
+  const level = Math.min(Math.max(digit - 1, 0), 4); // clamp to 0..4
+  return { type, level, q: ['Chipped','Flawed','Normal','Flawless','Perfect'][level], t: type, code };
+}
+
+/** Build old-style { name, requires: [{q,t}, ...] } entries for pure base-gem recipes
+ *  so the existing matchCombo / recipes panel / board-combine paths work. */
+function buildCombinationsFromRecipes() {
+  const out = [];
+  for (const [name, recipe] of Object.entries(RECIPES)) {
+    if (!recipe || !Array.isArray(recipe.ingredients)) continue;
+    // Only pure base-gem recipes (no {combo: ...} and exactly 3 codes) for the
+    // classic 3-roll combine path. Higher-tier recipes still appear via RECIPES.
+    const codes = recipe.ingredients.filter(i => typeof i === 'string');
+    if (codes.length !== recipe.ingredients.length) continue; // has combo ingredients
+    if (codes.length !== 3) continue;
+    const requires = codes.map(c => {
+      const p = parseIngredientCode(c);
+      return p ? { q: p.q, t: p.t } : null;
+    }).filter(Boolean);
+    if (requires.length === 3) {
+      out.push({ name, requires, sourceCodes: codes });
+    }
+  }
+  return out;
+}
+
+export const COMBINATIONS = buildCombinationsFromRecipes();
 export const COMBO_UPGRADES = {};
 
-// ---------------------------------------------------------------------------
-// What "engine wiring" still needs, for when that phase starts:
-//   1. A crafting flow that isn't tied to the 3-gem roll - something like a
-//      recipe browser (the existing "Combination recipes" panel is close)
-//      that checks the whole board for a satisfying set of ingredients
-//      (base-tier gems AND/OR existing combo towers) and lets the player
-//      trigger the craft, consuming those tiles.
-//   2. altSubstitute matching: treat a recipe as satisfied if either the
-//      exact tier-6 ingredient is on the board, OR all five of tiers 1-5
-//      of that letter are.
-//   3. Decide which NEW_ mechanics are worth building (chain/forked
-//      lightning and the on-hit splash-slow are probably the highest
-//      value; the tower-targeted auras like Resist/heal-the-castle likely
-//      aren't applicable to this engine at all and may be worth dropping
-//      rather than building).
+// Helper used by the engine to list every recipe (base + combo-ingredient) for the recipes modal.
+export function getAllRecipesForDisplay() {
+  const LEVELS = ['Chipped','Flawed','Normal','Flawless','Perfect'];
+  return Object.entries(RECIPES).map(([name, recipe]) => {
+    const requires = (recipe.ingredients || []).map(ing => {
+      if (typeof ing === 'string') {
+        const p = parseIngredientCode(ing);
+        return p ? { q: p.q, t: p.t, label: `${p.q} ${p.t}`, isCombo: false } : { label: ing, isCombo: false };
+      }
+      if (ing && ing.combo) {
+        return { q: null, t: ing.combo, label: ing.combo, isCombo: true };
+      }
+      return { label: String(ing), isCombo: false };
+    });
+    return {
+      name,
+      requires,
+      altSubstitute: recipe.altSubstitute || null,
+      craftable: COMBO_GEMS[name] ? COMBO_GEMS[name].craftable !== false : true
+    };
+  });
+}
