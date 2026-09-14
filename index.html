@@ -285,7 +285,6 @@
   let hoveredGemKey = null;
   let hoveredCreepId = null;
   let pendingGemChoice = null;
-    gemChoiceHits = [];
   // Hit regions for on-canvas gem choice overlay: [{cx,cy,r, action}]
   let gemChoiceHits = [];
 
@@ -1072,65 +1071,173 @@
     startRound();
   }
 
-  // Helper: Check if ingredients for a combo exist on the board including/excluding a selected gem
-  function findIngredientsForCombo(combo, targetKey) {
-    const targetGem = gems.get(targetKey);
-    if (!targetGem || targetGem.isCombo) return null;
+  // ---------------------------------------------------------------------------
+  // Full advanced-tree board crafting (RECIPES: base codes + combo ingredients
+  // + optional altSubstitute for tier-6 slots)
+  // ---------------------------------------------------------------------------
 
-    const targetDescriptor = `${GEM_LEVELS[targetGem.level]} ${targetGem.type}`;
-
-    // Check if target gem is even part of this combo's recipe
-    const reqDescriptors = combo.requires.map(r => `${r.q} ${r.t}`);
-    if (!reqDescriptors.includes(targetDescriptor)) return null;
-
-    // Track available board gems
-    const available = Array.from(gems.entries())
-      .filter(([k, g]) => !g.isCombo)
-      .map(([k, g]) => ({
+  function boardPieceList() {
+    // Every gem currently on the board as a consumable crafting piece.
+    return Array.from(gems.entries()).map(([k, g]) => {
+      if (g.isCombo) {
+        return {
+          key: k,
+          isCombo: true,
+          comboName: g.type,
+          type: g.type,
+          level: g.level || 0,
+          desc: g.type,
+          used: false
+        };
+      }
+      return {
         key: k,
+        isCombo: false,
+        type: g.type,
+        level: g.level,
         desc: `${GEM_LEVELS[g.level]} ${g.type}`,
+        code: letterCodeForGem(g.type, g.level),
         used: false
-      }));
-
-    const matchedKeys = [];
-
-    // Match target key first
-    const targetIdx = available.findIndex(g => g.key === targetKey);
-    if (targetIdx === -1) return null;
-    available[targetIdx].used = true;
-    matchedKeys.push(targetKey);
-
-    // Match remaining requirements
-    const remainingReqs = [...reqDescriptors];
-    const targetReqIdx = remainingReqs.indexOf(targetDescriptor);
-    remainingReqs.splice(targetReqIdx, 1);
-
-    for (const req of remainingReqs) {
-      const match = available.find(g => !g.used && g.desc === req);
-      if (!match) return null; // Missing requirement
-      match.used = true;
-      matchedKeys.push(match.key);
-    }
-
-    return matchedKeys;
+      };
+    });
   }
 
-  // Perform board combination
+  function letterCodeForGem(type, level) {
+    // Inverse of CODE_LETTER_TO_TYPE. Digit is 1-based quality index.
+    const reverse = {
+      Sapphire: 'B', Diamond: 'D', Opal: 'E', Emerald: 'G',
+      Amethyst: 'P', Aquamarine: 'Q', Ruby: 'R', Topaz: 'Y'
+    };
+    const letter = reverse[type];
+    if (!letter) return null;
+    return `${letter}${level + 1}`;
+  }
+
+  function pieceMatchesIngredient(piece, ing) {
+    if (typeof ing === 'string') {
+      // Base gem code e.g. 'B1'
+      const parsed = parseIngredientCode(ing);
+      if (!parsed) return false;
+      return !piece.isCombo && piece.type === parsed.type && piece.level === parsed.level;
+    }
+    if (ing && ing.combo) {
+      return piece.isCombo && piece.comboName === ing.combo;
+    }
+    return false;
+  }
+
+  /** Expand a recipe's ingredient list, optionally applying altSubstitute. */
+  function expandRecipeIngredients(recipe, useAlt) {
+    const ings = [...(recipe.ingredients || [])];
+    if (!useAlt || !recipe.altSubstitute) return ings;
+
+    const { replace, with: withList } = recipe.altSubstitute;
+    const idx = ings.findIndex(i => i === replace);
+    if (idx === -1) return ings;
+    // Replace the single tier-6 code with the full tier 1-5 set
+    ings.splice(idx, 1, ...withList);
+    return ings;
+  }
+
+  /**
+   * Try to assign unique board pieces to every ingredient of `recipeName`,
+   * preferring to include `anchorKey` as one of the matches when possible.
+   * Returns sorted unique keys, or null if the recipe cannot be satisfied.
+   */
+  function findIngredientsForRecipe(recipeName, anchorKey) {
+    const recipe = RECIPES[recipeName];
+    if (!recipe) return null;
+
+    const anchorGem = gems.get(anchorKey);
+    if (!anchorGem) return null;
+
+    // Try normal form first, then altSubstitute form if present.
+    for (const useAlt of [false, true]) {
+      if (useAlt && !recipe.altSubstitute) continue;
+      const ings = expandRecipeIngredients(recipe, useAlt);
+
+      // Does the anchor even participate in this ingredient list?
+      const anchorMatchesSome = ings.some(ing => {
+        if (anchorGem.isCombo) {
+          return ing && ing.combo === anchorGem.type;
+        }
+        const code = letterCodeForGem(anchorGem.type, anchorGem.level);
+        return code && ing === code;
+      });
+      if (!anchorMatchesSome) continue;
+
+      const pieces = boardPieceList();
+      const matchedKeys = [];
+
+      // Consume the anchor first for the first matching ingredient slot
+      let anchorAssigned = false;
+      for (const ing of ings) {
+        if (!anchorAssigned && pieceMatchesIngredient(
+          pieces.find(p => p.key === anchorKey) || {},
+          ing
+        )) {
+          const p = pieces.find(p => p.key === anchorKey);
+          if (p && !p.used) {
+            p.used = true;
+            matchedKeys.push(anchorKey);
+            anchorAssigned = true;
+            continue;
+          }
+        }
+        const match = pieces.find(p => !p.used && pieceMatchesIngredient(p, ing));
+        if (!match) {
+          matchedKeys.length = 0;
+          break;
+        }
+        match.used = true;
+        matchedKeys.push(match.key);
+      }
+
+      if (matchedKeys.length === ings.length && anchorAssigned) {
+        return matchedKeys;
+      }
+    }
+
+    return null;
+  }
+
+  // Back-compat wrapper used by older COMBINATIONS-based call sites.
+  function findIngredientsForCombo(combo, targetKey) {
+    // `combo` may be an old {name, requires} object or we may be called with a name.
+    const name = typeof combo === 'string' ? combo : (combo && combo.name);
+    if (!name) return null;
+    return findIngredientsForRecipe(name, targetKey);
+  }
+
+  /** List every craftable recipe the anchor gem can currently complete. */
+  function recipesAvailableForAnchor(anchorKey) {
+    const names = [];
+    for (const name of Object.keys(RECIPES)) {
+      if (COMBO_GEMS[name] && COMBO_GEMS[name].craftable === false) continue;
+      if (findIngredientsForRecipe(name, anchorKey)) {
+        names.push(name);
+      }
+    }
+    return names;
+  }
+
+  // Perform board combination using the full RECIPES table.
   function combineBoardGem(comboName, targetKey) {
-    const combo = COMBINATIONS.find(c => c.name === comboName);
-    if (!combo) return;
+    if (!RECIPES[comboName] || !COMBO_GEMS[comboName]) return;
 
-    const ingredientKeys = findIngredientsForCombo(combo, targetKey);
-    if (!ingredientKeys) return;
+    const ingredientKeys = findIngredientsForRecipe(comboName, targetKey);
+    if (!ingredientKeys) {
+      setMessage(`Cannot combine ${comboName} - missing ingredients.`);
+      return;
+    }
 
-    // Convert other ingredient gems back to plain stones
+    // Consume other ingredient gems (tiles stay as plain stones).
     ingredientKeys.forEach(k => {
       if (k !== targetKey) {
-        gems.delete(k); // Deletes gem status; tile remains in `blocked` set as a plain stone
+        gems.delete(k);
       }
     });
 
-    // Upgrade target tile into the combined gem
     gems.set(targetKey, {
       type: comboName,
       level: 0,
@@ -1146,7 +1253,7 @@
       lastAttack: 0
     };
 
-    logEvent(`✨ Board Recipe Complete! Combined into ${comboName} at ${targetKey}.`);
+    logEvent(`✨ Board Recipe Complete! Combined into ${comboName} at ${targetKey} (used ${ingredientKeys.length} ingredients).`);
     setMessage(`Created ${comboName}! Used ingredients revert to plain stones.`);
 
     updateStats();
@@ -2641,41 +2748,14 @@ function boardCounts() {
   return counts;
 }
 
-function satisfiedCombosOnBoard() {
-  const counts = boardCounts();
-
-  return COMBINATIONS.filter(
-    c => comboAvailability(c, counts).allOk
-  );
-}
-
 function sparkleEligibleKeys() {
-  const satisfied = satisfiedCombosOnBoard();
-
-  if (!satisfied.length) {
-    return new Set();
-  }
-
-  const neededLabels = new Set();
-
-  for (const c of satisfied) {
-    for (const r of c.requires) {
-      neededLabels.add(`${r.q} ${r.t}`);
-    }
-  }
-
+  // Any gem (base or combo) that can complete at least one recipe right now.
   const keys = new Set();
-
-  for (const [k, g] of gems) {
-    if (g.isCombo) {
-      continue;
-    }
-
-    if (neededLabels.has(`${GEM_LEVELS[g.level]} ${g.type}`)) {
+  for (const k of gems.keys()) {
+    if (recipesAvailableForAnchor(k).length) {
       keys.add(k);
     }
   }
-
   return keys;
 }
 
@@ -2802,10 +2882,30 @@ function statsLine(type, level) {
   return statLinesFromStats(GEM_TYPES[type].levels[level]);
 }
 
-function relevantCombos(type, quality) {
-  return COMBINATIONS.filter(c =>
-    c.requires.some(r => r.t === type && r.q === quality)
-  );
+function relevantCombos(type, quality, isCombo = false) {
+  // Recipes from the full tree that list this gem as an ingredient.
+  const out = [];
+  for (const [name, recipe] of Object.entries(RECIPES)) {
+    if (COMBO_GEMS[name] && COMBO_GEMS[name].craftable === false) continue;
+    let matches = false;
+    for (const ing of recipe.ingredients || []) {
+      if (isCombo) {
+        if (ing && ing.combo === type) { matches = true; break; }
+      } else if (typeof ing === 'string') {
+        const p = parseIngredientCode(ing);
+        if (p && p.type === type && GEM_LEVELS[p.level] === quality) { matches = true; break; }
+      }
+    }
+    // Also check altSubstitute list
+    if (!matches && !isCombo && recipe.altSubstitute) {
+      for (const code of recipe.altSubstitute.with || []) {
+        const p = parseIngredientCode(code);
+        if (p && p.type === type && GEM_LEVELS[p.level] === quality) { matches = true; break; }
+      }
+    }
+    if (matches) out.push({ name, recipe });
+  }
+  return out;
 }
 
 function comboAvailability(combo, counts) {
@@ -2858,14 +2958,25 @@ function showTooltip(clientX, clientY, gemKey) {
       .map(l => `<div class="stats-line">${l}</div>`)
       .join('');
 
-    html += `<div class="section-title">Combination options</div>
-             <div class="stats-line" style="color:#777">
-               Already a combined tower - not part of further recipes.
-             </div>`;
+    // Combo towers can still be ingredients in higher recipes
+    const availableNow = recipesAvailableForAnchor(gemKey);
+    const further = relevantCombos(g.type, null, true);
+    html += `<div class="section-title">Combination options</div>`;
+    if (availableNow.length) {
+      for (const name of availableNow) {
+        html += `<div class="combo"><span class="combo-name">${name}</span> <span class="ok">&#10003; Ready</span></div>`;
+      }
+    } else if (further.length) {
+      for (const c of further) {
+        html += `<div class="combo"><span class="combo-name">${c.name}</span> <span class="miss">&#10007; Need more</span></div>`;
+      }
+    } else {
+      html += `<div class="stats-line" style="color:#777">Not an ingredient in further recipes.</div>`;
+    }
   } else {
     const quality = GEM_LEVELS[g.level];
-    const counts = boardCounts();
-    const combos = relevantCombos(g.type, quality);
+    const combos = relevantCombos(g.type, quality, false);
+    const availableNowBase = recipesAvailableForAnchor(gemKey);
 
     html = `<h3 style="color:${GEM_TYPES[g.type].colour}">${quality} ${g.type}</h3>`;
     html += `<div class="stats-line" style="color:#999">${GEM_TYPES[g.type].role}</div>`;
@@ -2873,26 +2984,21 @@ function showTooltip(clientX, clientY, gemKey) {
       .map(l => `<div class="stats-line">${l}</div>`)
       .join('');
 
-    if (combos.length) {
-      html += `<div class="section-title">Combination options</div>`;
-
-      for (const c of combos) {
-        const { allOk, rows } = comboAvailability(c, counts);
-
-        html += `<div class="combo">
-                   <span class="combo-name">${c.name}</span>
-                   ${allOk ? '<span class="ok">&#10003; Available</span>' : '<span class="miss">&#10007; Not yet</span>'}`;
-
-        html += rows
-          .map(r => `<span class="ing ${r.ok ? 'ok' : 'miss'}">${r.ok ? '\u2713' : '\u2715'} ${r.label}</span>`)
-          .join('');
-
-        html += `</div>`;
+    html += `<div class="section-title">Combination options</div>`;
+    if (availableNowBase.length) {
+      for (const name of availableNowBase) {
+        html += `<div class="combo"><span class="combo-name">${name}</span> <span class="ok">&#10003; Ready to combine</span></div>`;
       }
-    } else {
-      html += `<div class="section-title">Combination options</div>
-               <div class="stats-line" style="color:#777">
-                 ${quality} ${g.type} isn't an ingredient in any recipe. See all recipes.
+    }
+    if (combos.length) {
+      for (const c of combos) {
+        if (availableNowBase.includes(c.name)) continue;
+        html += `<div class="combo"><span class="combo-name">${c.name}</span> <span class="miss">&#10007; Need more</span></div>`;
+      }
+    }
+    if (!availableNowBase.length && !combos.length) {
+      html += `<div class="stats-line" style="color:#777">
+                 ${quality} ${g.type} isn't an ingredient in any recipe.
                </div>`;
     }
   }
@@ -2991,27 +3097,48 @@ function validateRecipes() {
 }
 
 function recipeAvailabilityForDisplay(recipe) {
-  // counts of base gems
+  // Full check against RECIPES (handles multi-count, combo ingredients, altSubstitute).
+  // Prefer "any anchor" availability: if ANY board gem can complete this recipe, mark available.
+  let allOk = false;
+  for (const k of gems.keys()) {
+    if (findIngredientsForRecipe(recipe.name, k)) {
+      allOk = true;
+      break;
+    }
+  }
+
+  // For the ingredient rows, do a soft per-ingredient presence check (not exclusive).
   const counts = boardCounts();
-  // set of combo names currently on board
-  const comboOnBoard = new Set();
+  const comboCounts = new Map();
   for (const g of gems.values()) {
-    if (g.isCombo) comboOnBoard.add(g.type);
+    if (g.isCombo) comboCounts.set(g.type, (comboCounts.get(g.type) || 0) + 1);
   }
 
   const rows = [];
-  let allOk = true;
   for (const req of recipe.requires) {
     let ok = false;
     if (req.isCombo) {
-      ok = comboOnBoard.has(req.t || req.label);
+      ok = (comboCounts.get(req.t || req.label) || 0) >= 1;
     } else {
       const kk = `${req.q} ${req.t}`;
       ok = (counts.get(kk) || 0) >= 1;
     }
-    if (!ok) allOk = false;
     rows.push({ label: req.label, ok });
   }
+
+  // Note alt substitute if present
+  if (recipe.altSubstitute) {
+    const alt = recipe.altSubstitute;
+    const withLabels = (alt.with || []).map(c => {
+      const p = parseIngredientCode(c);
+      return p ? `${p.q} ${p.t}` : c;
+    });
+    rows.push({
+      label: `alt: ${withLabels.join(' + ')} instead of ${alt.replace}`,
+      ok: false // informational only
+    });
+  }
+
   return { allOk, rows };
 }
 
@@ -3096,11 +3223,10 @@ const gemCombineBtn = document.createElement('button');
 gemCombineBtn.style.cssText = 'margin-left:8px; background:#2e7d32; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;';
 gemCombineBtn.addEventListener('click', () => {
   if (!selectedGem) return;
-  for (const combo of COMBINATIONS) {
-    if (findIngredientsForCombo(combo, selectedGem.key)) {
-      combineBoardGem(combo.name, selectedGem.key);
-      break;
-    }
+  const available = recipesAvailableForAnchor(selectedGem.key);
+  if (available.length) {
+    // Prefer the first complete recipe (stable Object.keys order from RECIPES)
+    combineBoardGem(available[0], selectedGem.key);
   }
 });
 
@@ -3227,18 +3353,20 @@ function updateStats() {
     }
     gemUpgradeBtn.style.display = showUpgrade ? '' : 'none';
 
-    // Combine area
-    let showCombine = false;
-    if (!selectedGem.isCombo) {
-      for (const combo of COMBINATIONS) {
-        if (findIngredientsForCombo(combo, selectedGem.key)) {
-          showCombine = true;
-          gemCombineBtn.textContent = `Combine ➔ ${combo.name}`;
-          break;
-        }
-      }
+    // Combine area - works for base gems AND existing combo towers
+    // (advanced recipes often require combo ingredients).
+    const availableRecipes = recipesAvailableForAnchor(selectedGem.key);
+    if (availableRecipes.length) {
+      const label = availableRecipes.length === 1
+        ? `Combine ➔ ${availableRecipes[0]}`
+        : `Combine ➔ ${availableRecipes[0]} (+${availableRecipes.length - 1} more)`;
+      gemCombineBtn.textContent = label;
+      gemCombineBtn.style.display = '';
+      gemCombineBtn.title = availableRecipes.join(', ');
+    } else {
+      gemCombineBtn.style.display = 'none';
+      gemCombineBtn.title = '';
     }
-    gemCombineBtn.style.display = showCombine ? '' : 'none';
   } else {
     gemInfoEl.textContent = selectedStone ? `Selected stone for conversion: ${selectedStone}` : 'None';
   }
