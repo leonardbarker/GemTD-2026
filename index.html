@@ -126,7 +126,7 @@
       <button id="newMap">New map</button>
       <button id="endTurn">End turn</button>
       <button id="startRound">Start round</button>
-      <button id="deleteStoneBtn">Delete stone</button>
+      <button id="deleteStoneBtn">Delete tower</button>
       <button id="toggleRecipes">Combination recipes</button>
       <button id="toggleLog">Combat log</button>
       <label class="stat" style="display:flex; gap:6px; align-items:center;">Difficulty
@@ -146,8 +146,11 @@
 
     <div class="bar">
       <button id="randomGem" disabled>Convert selected stone (choose 1 of 3)</button>
-      <button id="removeStone" disabled>Undo last stone</button>
       <div class="stat" id="gemInfo">No gem or stone selected</div>
+    </div>
+
+    <div class="stat" style="margin-top:4px; color:#999; font-size:12px;">
+      Click any stone once to arm it (glows red), click again to remove it. Once all 5 stones for the turn are placed, clicking a stone selects it (glows yellow) for gem conversion.
     </div>
 
     <div id="message">Click an empty cell to place a stone.</div>
@@ -244,7 +247,7 @@
   // 1. Module Imports
   import { GEM_LEVELS, GEM_TYPES } from './js/definitions/gemTypes.js';
   import { COMBO_GEMS, COMBINATIONS, COMBO_UPGRADES } from './js/definitions/comboGems.js';
-  import { CREEP_TYPES, WAVES, DIFFICULTIES, getWaveDefinition, getCreepDefinition } from './js/definitions/creeps.js';
+  import { CREEP_LEVELS, DIFFICULTIES, getWaveDefinition, getCreepDefinition, getRoundCreepVariant } from './js/definitions/creeps.js';
 
   // 2. Global Constants & Canvas Setup
   const N = 20;
@@ -272,7 +275,7 @@
   let selectedGem = null;
   let selectedStone = null;
   let turnStonePlacements = [];
-  let stoneSelectionLocked = false;
+  let armedDeleteStone = null;
   let hoveredGemKey = null;
   let hoveredCreepId = null;
   let pendingGemChoice = null;
@@ -593,6 +596,8 @@
     // Selecting an existing gem is always allowed, even mid-round, so you
     // can inspect, downgrade, or combine towers while a round is running.
     if (gems.has(k)) {
+      armedDeleteStone=null;
+
       selectedGem={
         key:k,
         ...gems.get(k)
@@ -616,19 +621,50 @@
     }
 
     if (blocked.has(k) && !gems.has(k)) {
-      selectedStone=k;
       selectedGem=null;
-      stoneSelectionLocked=true;
 
-      setMessage(
-        `Stone at ${k} selected for conversion. Stone placement undo is now locked.`
-      );
+      if (stonesLeft > 0) {
+        // Still placing stones this turn: first click arms the stone
+        // (glows red), a second click on the same stone removes it. Works
+        // on any stone on the map, not just ones placed this turn.
+        if (armedDeleteStone === k) {
+          blocked.delete(k);
+          armedDeleteStone=null;
+
+          if (selectedStone === k) selectedStone=null;
+
+          const wasThisTurn = turnStonePlacements.includes(k);
+          turnStonePlacements = turnStonePlacements.filter(tk => tk !== k);
+
+          if (wasThisTurn) {
+            stonesLeft = Math.min(5, stonesLeft + 1);
+          }
+
+          const candidate = fullPath();
+          path = candidate;
+          pathPixels = candidate ? toPixelPath(candidate) : [];
+
+          setMessage(`Removed stone at ${k}.${wasThisTurn ? ` ${stonesLeft} stone${stonesLeft === 1 ? '' : 's'} left this turn.` : ''}`);
+        } else {
+          armedDeleteStone=k;
+          selectedStone=null;
+          setMessage(`Stone at ${k} armed - click it again to remove it.`);
+        }
+      } else {
+        // All 5 stones for this turn are placed: clicking a stone selects
+        // it (glows yellow) so you can convert it into a gem.
+        armedDeleteStone=null;
+        selectedStone=k;
+        setMessage(`Stone at ${k} selected for conversion.`);
+      }
 
       updateStats();
       draw();
 
       return;
     }
+
+    armedDeleteStone=null;
 
     if (stonesLeft<=0) {
       return setMessage(
@@ -711,7 +747,8 @@
       Flawed:poolLow*0.45,
       Normal:rateNormal,
       Flawless:rateFlawless,
-      Perfect:ratePerfect
+      Perfect:ratePerfect,
+      Huge:0
     };
   }
 
@@ -809,8 +846,6 @@
       );
     }
 
-    stoneSelectionLocked=true;
-
     const types=Object.keys(GEM_TYPES);
     const options=[];
 
@@ -887,6 +922,7 @@
 
     selectedStone=null;
     pendingGemChoice=null;
+    turnStonePlacements = turnStonePlacements.filter(tk => tk !== stoneKey);
 
     logEvent(
       `${GEM_LEVELS[choice.level]} ${choice.type} created at ${stoneKey}.`
@@ -920,6 +956,7 @@
 
     selectedStone = null;
     pendingGemChoice = null;
+    turnStonePlacements = turnStonePlacements.filter(tk => tk !== stoneKey);
 
     logEvent(`Merged duplicates into a ${GEM_LEVELS[targetLevel]} ${type} at ${stoneKey}.`);
 
@@ -1025,26 +1062,7 @@
       return;
     }
 
-    if (gameOver) return setMessage('Game over - start a new map to play again.');
-    if (pendingGemChoice) return setMessage('Finish your current gem choice before upgrading.');
-
-    const currentLevel = gem.level || 0;
-    if (currentLevel >= GEM_LEVELS.length - 1) {
-      return setMessage(`${gem.type} is already Perfect.`);
-    }
-
-    // 10 / 20 / 30 / 40g for Chipped -> Flawed -> Normal -> Flawless -> Perfect.
-    const cost = 10 * (currentLevel + 1);
-    if (gold < cost) {
-      return setMessage(`Not enough gold - ${GEM_LEVELS[currentLevel + 1]} upgrade costs ${cost}g.`);
-    }
-
-    gold -= cost;
-    gem.level = currentLevel + 1;
-    logEvent(`⬆️ Upgraded ${gem.type} to ${GEM_LEVELS[gem.level]} (-${cost}g). Gold: ${gold}`);
-    setMessage(`Upgraded ${gem.type} to ${GEM_LEVELS[gem.level]} for ${cost}g.`);
-    updateStats();
-    draw();
+    return setMessage('Base gems cannot be upgraded - only combination towers can. Merge duplicate rolls to raise a base gem\'s quality instead.');
   }
 
   // Spend gold to advance a tiered combo gem (e.g. Malachite) to its next tier.
@@ -1176,7 +1194,7 @@
     selectedStone=null;
     pendingGemChoice=null;
     turnStonePlacements=[];
-    stoneSelectionLocked=false;
+    armedDeleteStone=null;
     setDeleteArmed(false);
 
     renderGemChoicePanel();
@@ -1219,22 +1237,17 @@ function resetCombat() {
 // Base HP is deliberately much gentler than a literal Dota port. The
 // quadratic term gives the uncapped game a gradually accelerating curve while
 // keeping the early rounds compatible with the existing tower damage.
-function baseCreepHp(forRound) {
-  const r = Math.max(1, forRound);
-  const wave = getWaveDefinition(r);
-
-  // Two stacked 15% reductions from the original curve (0.85 * 0.85 = 0.7225
-  // of the raw formula) - the second one added because creeps were still
-  // feeling too tanky at the first pass. hpPercentMultiplier is the
-  // player-chosen HP% from the start menu, applied on top of difficulty.
-  return wave.hpBase * 0.85 * 0.85 * wave.hpScale * DIFFICULTIES[difficultyIndex].mult * hpPercentMultiplier;
+function baseCreepHp(forRound, def) {
+  return def.hp * DIFFICULTIES[difficultyIndex].mult * hpPercentMultiplier;
 }
 
 function getKillBounty(forRound) {
   // Each creep pays a small bounty that rises as rounds become harder.
-  // Round 1-5: 1g, 6-10: 2g, 11-15: 3g, etc.
+  // Round 1-5: 1g, 6-10: 2g, 11-15: 3g, etc. Halved per request (was the
+  // full 1 + floor((r-1)/5) value).
   const r = Math.max(1, forRound);
-  return 1 + Math.floor((r - 1) / 5);
+  const fullBounty = 1 + Math.floor((r - 1) / 5);
+  return Math.max(0, Math.round(fullBounty * 0.5));
 }
 
 function getLifeCost() {
@@ -1296,8 +1309,7 @@ function isTowerDisarmed(pos, now) {
 }
 
 function buildRoundCreepType() {
-  const wave = getWaveDefinition(round);
-  return wave.types[spawnedThisRound] || 'Normal';
+  return getRoundCreepVariant(round, spawnedThisRound).name;
 }
 
 // ---------------------------------------------------------------------------
@@ -1326,8 +1338,14 @@ function downgradeGem(key) {
     return;
   }
 
+  if ((gem.downgrades || 0) >= 1) {
+    setMessage("This gem has already been downgraded once - it can't be downgraded again.");
+    return;
+  }
+
   // Reduce quality tier by 1
   gem.level -= 1;
+  gem.downgrades = (gem.downgrades || 0) + 1;
   setMessage(`Downgraded ${gem.type} to ${GEM_LEVELS[gem.level]}.`);
 
   // Refresh selection stats
@@ -1377,40 +1395,6 @@ function deleteStone(k) {
   draw();
 }
 
-function undoLastStone() {
-  if (gameOver) {
-    return setMessage("Game over - start a new map to play again.");
-  }
-
-  if (roundActive) {
-    return setMessage("Can't edit the maze while a round is in progress.");
-  }
-
-  if (pendingGemChoice || stoneSelectionLocked) {
-    return setMessage("Stone placement undo is locked after selecting a stone for conversion.");
-  }
-
-  const k = turnStonePlacements.pop();
-  if (!k || !blocked.has(k) || gems.has(k)) {
-    return setMessage("There are no stone placements from this turn to undo.");
-  }
-
-  blocked.delete(k);
-  if (selectedStone === k) selectedStone = null;
-  setDeleteArmed(false);
-
-  const candidate = fullPath();
-  path = candidate;
-  pathPixels = candidate ? toPixelPath(candidate) : [];
-
-  stonesLeft = Math.min(5, stonesLeft + 1);
-
-  setMessage(`Undid stone at ${k}. ${stonesLeft} stone${stonesLeft === 1 ? '' : 's'} remaining.`);
-
-  updateStats();
-  draw();
-}
-
 function startRound() {
   if (gameOver) {
     return setMessage("Game over - start a new map to play again.");
@@ -1449,16 +1433,17 @@ function startRound() {
 
 function spawnOneCreep() {
   const typeName = buildRoundCreepType();
-  const def = getCreepDefinition(typeName, round);
-  const hp = baseCreepHp(round) * def.hpMult;
+  const isBossSpawn = round % 10 === 0 && spawnedThisRound === 0;
+  const def = getCreepDefinition(typeName, round, isBossSpawn);
+  const hp = baseCreepHp(round, def);
   const isAirRound = getWaveDefinition(round).isAirRound;
   const route = isAirRound ? airPixelPath : pathPixels;
   const start = route[0];
 
   const creep = {
     id: nextCreepId++,
-    type: typeName,
-    name: typeName,
+    type: def.type,
+    name: def.name,
     boss: !!def.boss,
     hp,
     maxHp: hp,
@@ -1477,8 +1462,11 @@ function spawnOneCreep() {
     disarmRadius: def.disarmRadius || 0,
     disarmDuration: def.disarmDuration || 0,
     regenPct: def.regenPct || 0,
+    regenFlat: def.regenFlat || 0,
     slowPct: 0,
     slowUntil: 0,
+    slowFlat: 0,
+    slowFlatUntil: 0,
     poison: null,
     burn: null,
     stunUntil: 0,
@@ -1515,7 +1503,7 @@ function updateSpawning(now) {
     logEvent(`— Round ${round} complete —`);
 
     if (!gameOver) {
-      const waveReward = 2 * round;
+      const waveReward = round; // was 2 * round, halved per request
       awardGold(waveReward, `Round ${round} completion`);
       performEndTurn(true);
     }
@@ -1552,6 +1540,9 @@ function updateCreeps(dt, now) {
     if (c.regenPct > 0 && c.hp > 0 && c.hp < c.maxHp) {
       c.hp = Math.min(c.maxHp, c.hp + c.maxHp * c.regenPct * (dt / 1000));
     }
+    if (c.regenFlat > 0 && c.hp > 0 && c.hp < c.maxHp) {
+      c.hp = Math.min(c.maxHp, c.hp + c.regenFlat * (dt / 1000));
+    }
 
     if (c.hp <= 0) {
       const bounty = getKillBounty(round);
@@ -1562,7 +1553,12 @@ function updateCreeps(dt, now) {
 
     const stunned = c.stunUntil > now;
     const slowed = c.slowUntil > now;
-    const speed = stunned ? 0 : BASE_CREEP_SPEED * GAME_SPEED * c.speedMult *
+    const flatSlowed = c.slowFlatUntil > now;
+    // Flat move-speed reduction (Sapphire) is applied before the
+    // percentage slow, floored so it heavily hinders rather than fully
+    // stops a creep even at the top Sapphire tier (-480).
+    const baseSpeed = flatSlowed ? Math.max(50, c.speedMult - c.slowFlat) : c.speedMult;
+    const speed = stunned ? 0 : baseSpeed * GAME_SPEED *
       (slowed ? (1 - c.slowPct) : 1);
 
     let remaining = speed * (dt / 1000);
@@ -1721,6 +1717,17 @@ function applySlow(creep, pct, durMs, now) {
   creep.slowUntil = Math.max(creep.slowUntil, now + durMs);
 }
 
+// Flat move-speed reduction (Sapphire): same "take the strongest, refresh
+// the duration" semantics as applySlow, just in raw speed units rather
+// than a percentage.
+function applySlowFlat(creep, amount, durMs, now) {
+  if (amount >= creep.slowFlat || now >= creep.slowFlatUntil) {
+    creep.slowFlat = amount;
+  }
+
+  creep.slowFlatUntil = Math.max(creep.slowFlatUntil, now + durMs);
+}
+
 function applyStun(creep, durMs, now) {
   creep.stunUntil = Math.max(creep.stunUntil, now + durMs);
 }
@@ -1728,7 +1735,7 @@ function applyStun(creep, durMs, now) {
 // On-hit armour reduction (Gold, Red Crystal): stacks with each hit, capped
 // so it can't push effective armour below the -9 floor mitigateDamage uses.
 function applyArmourReductionHit(creep, amount) {
-  creep.armourReduction = Math.min(30, (creep.armourReduction || 0) + amount);
+  creep.armourReduction = Math.min(300, (creep.armourReduction || 0) + amount);
 }
 
 // Flat, unmitigated DoT (Ancient Blood Stone's burn, Tourmaline's mana
@@ -1843,6 +1850,11 @@ function attackCreep(gemPos, gem, target, now, opts = {}) {
     note += ` (${Math.round(stats.slowPct * 100)}% slow)`;
   }
 
+  if (stats.slowFlat && target.hp > 0) {
+    applySlowFlat(target, stats.slowFlat, stats.slowDur, now);
+    note += ` (-${stats.slowFlat} move speed)`;
+  }
+
   if (stats.stunChance && target.hp > 0 && rand() < stats.stunChance) {
     applyStun(target, stats.stunDur, now);
     note += ` (stunned ${(stats.stunDur / 1000).toFixed(1)}s)`;
@@ -1888,10 +1900,26 @@ function attackCreep(gemPos, gem, target, now, opts = {}) {
     );
 
     for (const sc of splashTargets) {
-      attackCreep(gemPos, gem, sc, now, {
-        isSplashHit: true,
-        silent: true
-      });
+      if (stats.splashPct != null) {
+        // Cleave (Ruby): a % of the already-rolled hit, not a fresh full
+        // damage roll like the other splash gems.
+        const cleaveDmg = Math.round(dmg * stats.splashPct);
+        const cleaveResult = applyDamage(sc, cleaveDmg, damageType, { trueDamage: !!stats.trueDamage });
+
+        pushEffect({
+          kind: 'damageText',
+          x: sc.x,
+          y: sc.y,
+          text: cleaveResult.actual > 0 ? `-${Math.round(cleaveResult.actual)}` : (cleaveResult.dodged ? 'DODGE' : 'IMMUNE'),
+          start: now,
+          life: 650
+        });
+      } else {
+        attackCreep(gemPos, gem, sc, now, {
+          isSplashHit: true,
+          silent: true
+        });
+      }
     }
 
     pushEffect({
@@ -2113,7 +2141,7 @@ function draw(now = performance.now()) {
     const [x, y] = k.split(',').map(Number);
 
     const isSelectedStone = selectedStone === k;
-    const isUndoableStone = turnStonePlacements.includes(k) && !stoneSelectionLocked;
+    const isArmedStone = armedDeleteStone === k;
 
     if (isSelectedStone) {
       ctx.save();
@@ -2122,14 +2150,21 @@ function draw(now = performance.now()) {
       ctx.fillStyle = '#8f7a2f';
       ctx.fillRect(x * cell + 1, y * cell + 1, cell - 2, cell - 2);
       ctx.restore();
+    } else if (isArmedStone) {
+      ctx.save();
+      ctx.shadowColor = '#ff5252';
+      ctx.shadowBlur = 16;
+      ctx.fillStyle = '#7a2f2f';
+      ctx.fillRect(x * cell + 1, y * cell + 1, cell - 2, cell - 2);
+      ctx.restore();
     } else {
       ctx.fillStyle = '#707070';
       ctx.fillRect(x * cell + 2, y * cell + 2, cell - 4, cell - 4);
     }
 
-    ctx.strokeStyle = isSelectedStone ? '#fff6a3' : (isUndoableStone ? '#9a9a9a' : '#4e4e4e');
-    ctx.lineWidth = isSelectedStone ? 3 : 1;
-    ctx.strokeRect(x * cell + (isSelectedStone ? 1 : 2), y * cell + (isSelectedStone ? 1 : 2), cell - (isSelectedStone ? 2 : 4), cell - (isSelectedStone ? 2 : 4));
+    ctx.strokeStyle = isSelectedStone ? '#fff6a3' : (isArmedStone ? '#ff8a80' : '#4e4e4e');
+    ctx.lineWidth = (isSelectedStone || isArmedStone) ? 3 : 1;
+    ctx.strokeRect(x * cell + ((isSelectedStone || isArmedStone) ? 1 : 2), y * cell + ((isSelectedStone || isArmedStone) ? 1 : 2), cell - ((isSelectedStone || isArmedStone) ? 2 : 4), cell - ((isSelectedStone || isArmedStone) ? 2 : 4));
   }
 
   const sparkleKeys = sparkleEligibleKeys();
@@ -2586,10 +2621,15 @@ function statLinesFromStats(s) {
 
   if (s.damageType) parts.push(`${s.damageType === 'magic' ? 'Magic' : 'Physical'} damage`);
   if (s.trueDamage) parts.push('True damage (ignores armour)');
-  if (s.splashRadius) parts.push(`Splash ${s.splashRadius}`);
+  if (s.splashRadius) {
+    parts.push(s.splashPct != null
+      ? `Cleave ${Math.round(s.splashPct * 100)}% damage, radius ${s.splashRadius}`
+      : `Splash ${s.splashRadius}`);
+  }
   if (s.maxTargets === Infinity) parts.push('Hits every creep in range');
   else if (s.maxTargets) parts.push(`Up to ${s.maxTargets} targets`);
   if (s.slowPct) parts.push(`${Math.round(s.slowPct * 100)}% slow / ${s.slowDur / 1000}s`);
+  if (s.slowFlat) parts.push(`-${s.slowFlat} move speed / ${s.slowDur / 1000}s`);
   if (s.poisonDps) parts.push(`Poison ${s.poisonDps}/s / ${s.poisonDur / 1000}s`);
   if (s.auraPct) parts.push(`+${Math.round(s.auraPct * 100)}% attack speed aura`);
   if (s.critChance) parts.push(`${Math.round(s.critChance * 100)}% chance to hit x${s.critMult} damage`);
@@ -2917,13 +2957,6 @@ function updateStats() {
     !selectedStone ||
     !blocked.has(selectedStone);
 
-  $('removeStone').disabled =
-    gameOver ||
-    roundActive ||
-    !!pendingGemChoice ||
-    stoneSelectionLocked ||
-    turnStonePlacements.length === 0;
-
   $('newMap').disabled = roundActive;
   $('endTurn').disabled = gameOver || roundActive || !!pendingGemChoice;
   $('startRound').disabled = gameOver || roundActive || !!pendingGemChoice;
@@ -2970,6 +3003,10 @@ function updateStats() {
       gemDowngradeNote.textContent = 'Already Chipped - the lowest quality';
       gemDowngradeNote.style.display = '';
       gemDowngradeBtn.style.display = 'none';
+    } else if ((selectedGem.downgrades || 0) >= 1) {
+      gemDowngradeNote.textContent = 'Already downgraded once - cannot downgrade again';
+      gemDowngradeNote.style.display = '';
+      gemDowngradeBtn.style.display = 'none';
     } else {
       const lowerQuality = GEM_LEVELS[selectedGem.level - 1];
       const canDowngrade = !gameOver && !pendingGemChoice;
@@ -3000,11 +3037,10 @@ function updateStats() {
         upgradeCost = currentTier.upgradeCost;
         nextUpgradeName = nextTier.name;
       }
-    } else if (selectedGem.level < GEM_LEVELS.length - 1) {
-      showUpgrade = true;
-      upgradeCost = 10 * (selectedGem.level + 1);
-      nextUpgradeName = GEM_LEVELS[selectedGem.level + 1];
     }
+    // Base (non-combo) gems are no longer upgradeable for gold - only
+    // combination towers can be. Raise a base gem's quality by matching
+    // duplicates on a re-roll instead.
 
     if (showUpgrade) {
       const canAfford = gold >= upgradeCost && !gameOver && !pendingGemChoice;
@@ -3122,7 +3158,6 @@ difficultySelect.onchange = () => {
 
 $('endTurn').onclick = endTurn;
 $('randomGem').onclick = offerGemChoices;
-$('removeStone').onclick = undoLastStone;
 $('startRound').onclick = startRound;
 $('buyLifeBtn').onclick = buyLife;
 
@@ -3139,16 +3174,16 @@ $('deleteStoneBtn').onclick = () => {
     return setMessage("Pick one of the three offered gems first.");
   }
 
-  const targetKey = selectedGem ? selectedGem.key : selectedStone;
+  const targetKey = selectedGem ? selectedGem.key : null;
 
   if (!targetKey || !blocked.has(targetKey)) {
     setDeleteArmed(false);
-    return setMessage("Select a stone or gem on the board first, then click Delete Stone.");
+    return setMessage("Select a tower on the board first, then click Delete Tower. Plain stones are removed by clicking them twice.");
   }
 
   if (!deleteArmed) {
     setDeleteArmed(true);
-    setMessage(`Click Delete Stone again to permanently remove the stone at ${targetKey}.`);
+    setMessage(`Click Delete Tower again to permanently remove the tower at ${targetKey}.`);
     return;
   }
 
@@ -3196,7 +3231,7 @@ function generateNewMap() {
   selectedStone = null;
   pendingGemChoice = null;
   turnStonePlacements = [];
-  stoneSelectionLocked = false;
+  armedDeleteStone = null;
   setDeleteArmed(false);
 
   gems.clear();
@@ -3279,11 +3314,7 @@ function loop(now) {
 
 // Note: no inline HTML onclick handlers reference these, and all buttons
 // are wired via addEventListener/.onclick above - window globals aren't
-// needed. (Previously this block also did `window.removeStone = removeStone`,
-// which referenced an undeclared variable - the actual function is
-// `undoLastStone` - and threw a ReferenceError that silently aborted the
-// rest of this script, including makeMap()/updateStats()/requestAnimationFrame()
-// below. Removed rather than "fixed" since nothing external depends on it.)
+// needed.
 
 // ---------------------------------------------------------------------------
 // Start Menu
