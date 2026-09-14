@@ -146,12 +146,12 @@
     </div>
 
     <div class="bar">
-      <button id="randomGem" disabled>Convert selected stone (choose 1 of 3)</button>
+      <button id="randomGem" disabled>Convert selected stone (overlay on map)</button>
       <div class="stat" id="gemInfo">No gem or stone selected</div>
     </div>
 
     <div class="stat" style="margin-top:4px; color:#999; font-size:12px;">
-      Click any stone once to arm it (glows red), click again to remove it. Once all 5 stones for the turn are placed, clicking a stone selects it (glows yellow) for gem conversion.
+      Click any stone once to arm it (glows red), click again to remove it. Once all 5 stones for the turn are placed, click a stone to select it (glows yellow), then click it again to open the gem choices around it on the map.
     </div>
 
     <div id="message">Click an empty cell to place a stone.</div>
@@ -252,7 +252,7 @@
 <script type="module">
   // 1. Module Imports
   import { GEM_LEVELS, GEM_TYPES } from './js/definitions/gemTypes.js';
-  import { COMBO_GEMS, COMBINATIONS, COMBO_UPGRADES } from './js/definitions/comboGems.js';
+  import { COMBO_GEMS, COMBINATIONS, COMBO_UPGRADES, RECIPES, getAllRecipesForDisplay, parseIngredientCode } from './js/definitions/comboGems.js';
   import { CREEP_LEVELS, DIFFICULTIES, getWaveDefinition, getCreepDefinition, getRoundCreepVariant } from './js/definitions/creeps.js';
 
   // 2. Global Constants & Canvas Setup
@@ -285,6 +285,9 @@
   let hoveredGemKey = null;
   let hoveredCreepId = null;
   let pendingGemChoice = null;
+    gemChoiceHits = [];
+  // Hit regions for on-canvas gem choice overlay: [{cx,cy,r, action}]
+  let gemChoiceHits = [];
 
   // ---------------------------------------------------------------------------
   // Gem helpers
@@ -596,8 +599,16 @@
       return;
     }
 
+    // If a gem-choice overlay is open, first try to hit one of the choice cards.
     if (pendingGemChoice) {
-      setMessage("Pick one of the three offered gems first.");
+      const hit = hitGemChoice(x, y);
+      if (hit) {
+        if (hit.action === 'choose') chooseGem(hit.index);
+        else if (hit.action === 'combo') chooseComboGem();
+        else if (hit.action === 'dup') chooseDuplicateUpgrade(hit.type, hit.targetLevel);
+        return;
+      }
+      setMessage("Pick one of the offered gems on the board (or click Cancel if available).");
       return;
     }
 
@@ -661,11 +672,17 @@
           setMessage(`Stone at ${k} armed - click it again to remove it.`);
         }
       } else {
-        // All 5 stones for this turn are placed: clicking a stone selects
-        // it (glows yellow) so you can convert it into a gem.
+        // All 5 stones for this turn are placed.
+        // First click selects the stone (yellow glow). Second click on the
+        // same selected stone opens the gem-choice overlay around it.
         armedDeleteStone=null;
+        if (selectedStone === k && gemAvailable) {
+          offerGemChoices();
+          return;
+        }
         selectedStone=k;
-        setMessage(`Stone at ${k} selected for conversion.`);
+        selectedGem=null;
+        setMessage(`Stone at ${k} selected. Click it again to choose a gem.`);
       }
 
       updateStats();
@@ -885,16 +902,92 @@
       extraComboKey
     };
 
+    // Also detect duplicate-pair upgrade option for the overlay
+    const dupCounts = {};
+    options.forEach((opt, idx) => {
+      const k = `${opt.level}_${opt.type}`;
+      if (!dupCounts[k]) dupCounts[k] = [];
+      dupCounts[k].push(idx);
+    });
+    let dupOffer = null;
+    for (const k of Object.keys(dupCounts)) {
+      if (dupCounts[k].length >= 2) {
+        const sample = options[dupCounts[k][0]];
+        if (sample.level < GEM_LEVELS.length - 1) {
+          dupOffer = { type: sample.type, targetLevel: sample.level + 1 };
+          break;
+        }
+      }
+    }
+    pendingGemChoice.dupOffer = dupOffer;
+
     setMessage(
       extraComboKey
-        ? `Pick one of the three gems - or combine with your board's ${GEM_LEVELS[gems.get(extraComboKey).level]} ${gems.get(extraComboKey).type} into a Tourmaline!`
+        ? `Pick a gem around the stone - or combine with your board's ${GEM_LEVELS[gems.get(extraComboKey).level]} ${gems.get(extraComboKey).type} into a Tourmaline!`
         : finalComboMatch
-          ? `Pick one of the three gems - or combine all three into a ${finalComboMatch}!`
-          : "Pick one of the three gems to create at that stone."
+          ? `Pick a gem around the stone - or combine all three into a ${finalComboMatch}!`
+          : "Pick one of the three gems shown around the stone."
     );
 
+    buildGemChoiceHits();
     renderGemChoicePanel();
     updateStats();
+    draw();
+  }
+
+  function buildGemChoiceHits() {
+    gemChoiceHits = [];
+    if (!pendingGemChoice) return;
+
+    const { stoneKey, options, comboMatch, dupOffer } = pendingGemChoice;
+    const [sx, sy] = stoneKey.split(',').map(Number);
+    const cx = (sx + 0.5) * cell;
+    const cy = (sy + 0.5) * cell;
+
+    // Layout cards in a ring around the stone. Up to 5 items (3 gems + dup + combo).
+    const items = [];
+    options.forEach((opt, idx) => items.push({ kind: 'choose', index: idx, opt }));
+    if (dupOffer) items.push({ kind: 'dup', ...dupOffer });
+    if (comboMatch) items.push({ kind: 'combo', name: comboMatch });
+
+    const n = items.length;
+    const radius = cell * 2.4;
+    const startAngle = -Math.PI / 2; // top
+    for (let i = 0; i < n; i++) {
+      const ang = startAngle + (i / n) * Math.PI * 2;
+      const hx = cx + Math.cos(ang) * radius;
+      const hy = cy + Math.sin(ang) * radius;
+      const r = cell * 0.95;
+      const item = items[i];
+      gemChoiceHits.push({
+        cx: hx, cy: hy, r,
+        action: item.kind,
+        index: item.index,
+        type: item.type,
+        targetLevel: item.targetLevel,
+        name: item.name,
+        opt: item.opt
+      });
+    }
+  }
+
+  function hitGemChoice(gridX, gridY) {
+    // Convert grid cell click to pixel and test against hit circles
+    const px = (gridX + 0.5) * cell;
+    const py = (gridY + 0.5) * cell;
+    // Also allow a slightly larger tolerance by testing the click pixel against regions
+    // Recompute from last mouse if needed - but tryStone only gets cell coords.
+    // Test each hit region: if the cell center is inside the circle OR the clicked cell
+    // is the one under the card.
+    for (const h of gemChoiceHits) {
+      // Map hit center back to nearest grid cell for a simple cell-based hit
+      const hx = Math.floor(h.cx / cell);
+      const hy = Math.floor(h.cy / cell);
+      if (gridX === hx && gridY === hy) return h;
+      // Fallback: distance from cell center to hit center
+      if (Math.hypot(px - h.cx, py - h.cy) <= h.r * 1.15) return h;
+    }
+    return null;
   }
 
   function chooseGem(index) {
@@ -932,6 +1025,7 @@
 
     selectedStone=null;
     pendingGemChoice=null;
+    gemChoiceHits=[];
     turnStonePlacements = turnStonePlacements.filter(tk => tk !== stoneKey);
 
     logEvent(
@@ -966,6 +1060,7 @@
 
     selectedStone = null;
     pendingGemChoice = null;
+    gemChoiceHits = [];
     turnStonePlacements = turnStonePlacements.filter(tk => tk !== stoneKey);
 
     logEvent(`Merged duplicates into a ${GEM_LEVELS[targetLevel]} ${type} at ${stoneKey}.`);
@@ -1166,6 +1261,7 @@
 
     selectedStone=null;
     pendingGemChoice=null;
+    gemChoiceHits=[];
 
     logEvent(
       extraComboKey
@@ -1203,6 +1299,7 @@
     selectedGem=null;
     selectedStone=null;
     pendingGemChoice=null;
+    gemChoiceHits=[];
     turnStonePlacements=[];
     armedDeleteStone=null;
     setDeleteArmed(false);
@@ -2366,7 +2463,122 @@ function draw(now = performance.now()) {
     }
   }
 
+  // Gem choice overlay around the selected stone
+  if (pendingGemChoice && gemChoiceHits.length) {
+    drawGemChoiceOverlay(now);
+  }
+
   drawCombatEffects(now);
+}
+
+function drawGemChoiceOverlay(now) {
+  const { stoneKey, options, comboMatch, extraComboKey, dupOffer } = pendingGemChoice;
+  const [sx, sy] = stoneKey.split(',').map(Number);
+  const scx = (sx + 0.5) * cell;
+  const scy = (sy + 0.5) * cell;
+
+  // Dim the board slightly
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.28)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Highlight the target stone
+  ctx.strokeStyle = '#ffe66d';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(scx, scy, cell * 0.48, 0, Math.PI * 2);
+  ctx.stroke();
+
+  for (const h of gemChoiceHits) {
+    const isCombo = h.action === 'combo';
+    const isDup = h.action === 'dup';
+
+    // Card background
+    ctx.beginPath();
+    ctx.arc(h.cx, h.cy, h.r, 0, Math.PI * 2);
+    if (isCombo) {
+      ctx.fillStyle = 'rgba(80, 40, 20, 0.92)';
+      ctx.strokeStyle = '#e8c34a';
+      ctx.lineWidth = 2.5;
+    } else if (isDup) {
+      ctx.fillStyle = 'rgba(25, 55, 90, 0.92)';
+      ctx.strokeStyle = '#4a90e2';
+      ctx.lineWidth = 2;
+    } else {
+      const def = GEM_TYPES[h.opt.type];
+      ctx.fillStyle = 'rgba(20, 20, 24, 0.94)';
+      ctx.strokeStyle = def ? def.colour : '#aaa';
+      ctx.lineWidth = 2;
+    }
+    ctx.fill();
+    ctx.stroke();
+
+    // Pulse for combo
+    if (isCombo) {
+      const pulse = 0.5 + 0.5 * Math.sin((now || performance.now()) / 250);
+      ctx.strokeStyle = `rgba(232,195,74,${0.4 + pulse * 0.5})`;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(h.cx, h.cy, h.r + 3 + pulse * 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    if (h.action === 'choose' && h.opt) {
+      const def = GEM_TYPES[h.opt.type];
+      const lvl = GEM_LEVELS[h.opt.level];
+      ctx.fillStyle = def.colour;
+      ctx.font = `bold ${Math.round(cell * 0.45)}px system-ui`;
+      ctx.fillText(def.icon || h.opt.type[0], h.cx, h.cy - cell * 0.22);
+      ctx.fillStyle = '#eee';
+      ctx.font = `bold ${Math.round(cell * 0.22)}px system-ui`;
+      ctx.fillText(lvl, h.cx, h.cy + cell * 0.12);
+      ctx.font = `${Math.round(cell * 0.2)}px system-ui`;
+      ctx.fillStyle = '#ccc';
+      ctx.fillText(h.opt.type, h.cx, h.cy + cell * 0.32);
+    } else if (isDup) {
+      ctx.fillStyle = '#8ec8ff';
+      ctx.font = `bold ${Math.round(cell * 0.2)}px system-ui`;
+      ctx.fillText('Combine Pair', h.cx, h.cy - cell * 0.18);
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${Math.round(cell * 0.22)}px system-ui`;
+      ctx.fillText(`${GEM_LEVELS[h.targetLevel]}`, h.cx, h.cy + cell * 0.08);
+      ctx.font = `${Math.round(cell * 0.2)}px system-ui`;
+      ctx.fillText(h.type, h.cx, h.cy + cell * 0.3);
+    } else if (isCombo) {
+      const def = COMBO_GEMS[h.name] || {};
+      ctx.fillStyle = '#e8c34a';
+      ctx.font = `bold ${Math.round(cell * 0.2)}px system-ui`;
+      ctx.fillText('(Combine)', h.cx, h.cy - cell * 0.22);
+      ctx.fillStyle = def.colour || '#fff';
+      ctx.font = `bold ${Math.round(cell * 0.22)}px system-ui`;
+      // wrap long names
+      const name = h.name;
+      if (name.length > 14) {
+        const mid = Math.ceil(name.length / 2);
+        const sp = name.lastIndexOf(' ', mid);
+        const split = sp > 4 ? sp : mid;
+        ctx.fillText(name.slice(0, split), h.cx, h.cy + cell * 0.02);
+        ctx.fillText(name.slice(split).trim(), h.cx, h.cy + cell * 0.26);
+      } else {
+        ctx.fillText(name, h.cx, h.cy + cell * 0.12);
+      }
+    }
+  }
+
+  // Connecting lines from stone to cards
+  ctx.strokeStyle = 'rgba(255,230,109,0.35)';
+  ctx.lineWidth = 1;
+  for (const h of gemChoiceHits) {
+    ctx.beginPath();
+    ctx.moveTo(scx, scy);
+    ctx.lineTo(h.cx, h.cy);
+    ctx.stroke();
+  }
+
+  ctx.restore();
 }
 
 function drawCombatEffects(now) {
@@ -2513,111 +2725,39 @@ function renderGemChoicePanel() {
     return;
   }
 
+  // Side panel is kept minimal - the real choices are drawn as an overlay
+  // around the stone on the board (desktop + mobile).
   panel.style.display = 'block';
   panel.innerHTML = '';
 
-  const { options, comboMatch, extraComboKey, stoneKey } = pendingGemChoice;
-
-  // Header
-  const title = document.createElement('h2');
-  title.textContent = `Select a Gem for tile ${stoneKey}`;
+  const { stoneKey, comboMatch, options } = pendingGemChoice;
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:13px;color:#ccc;margin-bottom:6px;';
+  title.textContent = `Choose a gem around the stone at ${stoneKey} (click a card on the map).`;
   panel.appendChild(title);
 
-  // 1. Check for duplicates in the 3 rolled options
-  const counts = {};
-  options.forEach((opt, idx) => {
-    const k = `${opt.level}_${opt.type}`;
-    if (!counts[k]) counts[k] = [];
-    counts[k].push(idx);
-  });
-
-  // 2. Render standard 3 choices
-  options.forEach((opt, idx) => {
-    const def = GEM_TYPES[opt.type];
-    const lvlName = GEM_LEVELS[opt.level];
-
-    const btn = document.createElement('button');
-    btn.className = 'gem-choice-card';
-
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'gem-choice-name';
-
-    const iconSpan = document.createElement('span');
-    iconSpan.className = 'gem-choice-icon';
-    iconSpan.textContent = def.icon || opt.type[0];
-    iconSpan.style.color = def.colour;
-
-    nameSpan.appendChild(iconSpan);
-    nameSpan.appendChild(document.createTextNode(`${lvlName} ${opt.type}`));
-
-    const roleSpan = document.createElement('span');
-    roleSpan.className = 'gem-choice-role';
-    roleSpan.textContent = def.role;
-
-    const statsSpan = document.createElement('span');
-    statsSpan.className = 'gem-choice-stats';
-    statsSpan.textContent = `Dmg: ${def.levels[opt.level].dmgMin}-${def.levels[opt.level].dmgMax} | Range: ${def.levels[opt.level].range}`;
-
-    btn.appendChild(nameSpan);
-    btn.appendChild(roleSpan);
-    btn.appendChild(statsSpan);
-
-    btn.addEventListener('click', () => chooseGem(idx));
-    panel.appendChild(btn);
-  });
-
-  // 3. Append Duplicate Upgrade card if eligible
-  Object.keys(counts).forEach(k => {
-    const indices = counts[k];
-    if (indices.length >= 2) {
-      const sample = options[indices[0]];
-      if (sample.level < GEM_LEVELS.length - 1) {
-        const nextLevelName = GEM_LEVELS[sample.level + 1];
-
-        const dupBtn = document.createElement('button');
-        dupBtn.className = 'gem-choice-card';
-        dupBtn.style.borderColor = '#4a90e2';
-
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'gem-choice-name';
-        nameSpan.textContent = `Combine Pair ➔ ${nextLevelName} ${sample.type}`;
-
-        const roleSpan = document.createElement('span');
-        roleSpan.className = 'gem-choice-role';
-        roleSpan.textContent = `Combine two identical ${GEM_LEVELS[sample.level]} gems into the next tier.`;
-
-        dupBtn.appendChild(nameSpan);
-        dupBtn.appendChild(roleSpan);
-
-        dupBtn.addEventListener('click', () => chooseDuplicateUpgrade(sample.type, sample.level + 1));
-        panel.appendChild(dupBtn);
-      }
-    }
-  });
-
-  // 4. Append 4th "Combine All 3" Option if combo recipe matches
   if (comboMatch) {
-    const comboBtn = document.createElement('button');
-    comboBtn.className = 'gem-choice-card combo-offer';
-
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'gem-choice-name';
-    nameSpan.style.color = '#e8cbd2';
-    nameSpan.textContent = `✨ Combine All ➔ ${comboMatch}`;
-
-    const roleSpan = document.createElement('span');
-    roleSpan.className = 'gem-choice-role';
-    roleSpan.textContent = extraComboKey
-      ? `Combine all 3 rolled gems with the board gem at ${extraComboKey}!`
-      : 'Combine all 3 rolled gems into a special recipe gem!';
-
-    comboBtn.appendChild(nameSpan);
-    comboBtn.appendChild(roleSpan);
-
-    comboBtn.addEventListener('click', () => chooseComboGem());
-    panel.appendChild(comboBtn);
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:12px;color:#e8c34a;margin-bottom:6px;';
+    note.textContent = `A (Combine) ${comboMatch} option is also available.`;
+    panel.appendChild(note);
   }
+
+  const cancel = document.createElement('button');
+  cancel.textContent = 'Cancel selection';
+  cancel.style.marginTop = '4px';
+  cancel.addEventListener('click', () => {
+    pendingGemChoice = null;
+    gemChoiceHits = [];
+    selectedStone = null;
+    setMessage('Gem selection cancelled.');
+    renderGemChoicePanel();
+    updateStats();
+    draw();
+  });
+  panel.appendChild(cancel);
 }
+
 
 function statLinesFromStats(s) {
   const dmg = s.dmgMin === s.dmgMax ? `${s.dmgMin}` : `${s.dmgMin}-${s.dmgMax}`;
@@ -2821,24 +2961,22 @@ let recipesOpen = false;
 
 function validateRecipes() {
   const errors = [];
+  const all = getAllRecipesForDisplay();
 
-  for (const recipe of COMBINATIONS) {
-    if (!COMBO_GEMS[recipe.name]) {
+  for (const recipe of all) {
+    if (!COMBO_GEMS[recipe.name] && recipe.craftable !== false) {
       errors.push(`Recipe "${recipe.name}" has no matching COMBO_GEMS definition.`);
     }
-
     for (const req of recipe.requires) {
-      if (!GEM_TYPES[req.t]) {
+      if (!req.isCombo && req.t && !GEM_TYPES[req.t]) {
         errors.push(`Recipe "${recipe.name}" references unknown gem type "${req.t}".`);
-      }
-      if (!GEM_LEVELS.includes(req.q)) {
-        errors.push(`Recipe "${recipe.name}" references unknown quality "${req.q}".`);
       }
     }
   }
 
   for (const comboName of Object.keys(COMBO_GEMS)) {
-    if (!COMBINATIONS.some(recipe => recipe.name === comboName)) {
+    if (COMBO_GEMS[comboName].craftable === false) continue;
+    if (!all.some(recipe => recipe.name === comboName)) {
       errors.push(`Combination gem "${comboName}" has no recipe entry.`);
     }
   }
@@ -2846,19 +2984,44 @@ function validateRecipes() {
   if (errors.length) {
     console.error('Recipe validation failed:', errors);
   } else {
-    console.info(`Recipe validation passed: ${COMBINATIONS.length} recipes loaded and displayed.`);
+    console.info(`Recipe validation passed: ${all.length} recipes loaded.`);
   }
 
   return errors;
 }
 
-function renderRecipesPanel() {
+function recipeAvailabilityForDisplay(recipe) {
+  // counts of base gems
   const counts = boardCounts();
+  // set of combo names currently on board
+  const comboOnBoard = new Set();
+  for (const g of gems.values()) {
+    if (g.isCombo) comboOnBoard.add(g.type);
+  }
+
+  const rows = [];
+  let allOk = true;
+  for (const req of recipe.requires) {
+    let ok = false;
+    if (req.isCombo) {
+      ok = comboOnBoard.has(req.t || req.label);
+    } else {
+      const kk = `${req.q} ${req.t}`;
+      ok = (counts.get(kk) || 0) >= 1;
+    }
+    if (!ok) allOk = false;
+    rows.push({ label: req.label, ok });
+  }
+  return { allOk, rows };
+}
+
+function renderRecipesPanel() {
+  const all = getAllRecipesForDisplay();
   const recipeErrors = validateRecipes();
 
-  const html = COMBINATIONS
+  const html = all
     .map(c => {
-      const { allOk, rows } = comboAvailability(c, counts);
+      const { allOk, rows } = recipeAvailabilityForDisplay(c);
       const def = COMBO_GEMS[c.name] || {};
 
       let tierHtml = '';
@@ -2887,7 +3050,7 @@ function renderRecipesPanel() {
     })
     .join('');
 
-  $('recipesList').innerHTML = `<div class="stats-line" style="margin-bottom:10px;color:#aaa;">Showing all ${COMBINATIONS.length} recipes.</div>${recipeErrors.length ? `<div class="stats-line miss" style="margin-bottom:10px;">Recipe data issue: ${recipeErrors.join(' ')}</div>` : ''}${html}`;
+  $('recipesList').innerHTML = `<div class="stats-line" style="margin-bottom:10px;color:#aaa;">Showing all ${all.length} recipes (base + advanced).</div>${recipeErrors.length ? `<div class="stats-line miss" style="margin-bottom:10px;">Recipe data issue: ${recipeErrors.join(' ')}</div>` : ''}${html}`;
 }
 
 function openRecipes() {
@@ -3269,6 +3432,7 @@ function generateNewMap() {
   selectedGem = null;
   selectedStone = null;
   pendingGemChoice = null;
+    gemChoiceHits = [];
   turnStonePlacements = [];
   armedDeleteStone = null;
   setDeleteArmed(false);
