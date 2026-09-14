@@ -1156,33 +1156,26 @@
       if (useAlt && !recipe.altSubstitute) continue;
       const ings = expandRecipeIngredients(recipe, useAlt);
 
-      // Does the anchor even participate in this ingredient list?
-      const anchorMatchesSome = ings.some(ing => {
-        if (anchorGem.isCombo) {
-          return ing && ing.combo === anchorGem.type;
-        }
-        const code = letterCodeForGem(anchorGem.type, anchorGem.level);
-        return code && ing === code;
-      });
-      if (!anchorMatchesSome) continue;
-
       const pieces = boardPieceList();
+      const anchorPiece = pieces.find(p => p.key === anchorKey);
+      if (!anchorPiece) continue;
+
+      // Does the anchor even participate in this ingredient list?
+      // Use pieceMatchesIngredient (not letter-code equality) so P6/clamped
+      // Perfect tiers still match the anchor correctly.
+      if (!ings.some(ing => pieceMatchesIngredient(anchorPiece, ing))) continue;
+
       const matchedKeys = [];
 
-      // Consume the anchor first for the first matching ingredient slot
+      // Prefer consuming the anchor for the first slot it can fill, so the
+      // selected gem is always part of the craft.
       let anchorAssigned = false;
       for (const ing of ings) {
-        if (!anchorAssigned && pieceMatchesIngredient(
-          pieces.find(p => p.key === anchorKey) || {},
-          ing
-        )) {
-          const p = pieces.find(p => p.key === anchorKey);
-          if (p && !p.used) {
-            p.used = true;
-            matchedKeys.push(anchorKey);
-            anchorAssigned = true;
-            continue;
-          }
+        if (!anchorAssigned && !anchorPiece.used && pieceMatchesIngredient(anchorPiece, ing)) {
+          anchorPiece.used = true;
+          matchedKeys.push(anchorKey);
+          anchorAssigned = true;
+          continue;
         }
         const match = pieces.find(p => !p.used && pieceMatchesIngredient(p, ing));
         if (!match) {
@@ -1219,6 +1212,80 @@
       }
     }
     return names;
+  }
+
+  function ingredientLabel(ing) {
+    if (typeof ing === 'string') {
+      const p = parseIngredientCode(ing);
+      return p ? `${p.q} ${p.t}` : ing;
+    }
+    if (ing && ing.combo) return ing.combo;
+    return String(ing);
+  }
+
+  /**
+   * Progress toward a recipe. When anchorKey is set, the anchor is reserved
+   * first so the reported missing list matches what a Combine from that gem
+   * would need. Picks the better of normal vs altSubstitute forms.
+   * Returns { complete, usedAlt, rows: [{ label, ok }] }.
+   */
+  function getRecipeProgress(recipeName, anchorKey = null) {
+    const recipe = RECIPES[recipeName];
+    if (!recipe) return null;
+
+    let best = null;
+
+    for (const useAlt of [false, true]) {
+      if (useAlt && !recipe.altSubstitute) continue;
+      const ings = expandRecipeIngredients(recipe, useAlt);
+      const pieces = boardPieceList();
+      const rows = [];
+      let okCount = 0;
+
+      // Reserve anchor first when it can fill a slot in this form.
+      let anchorPiece = null;
+      if (anchorKey) {
+        anchorPiece = pieces.find(p => p.key === anchorKey) || null;
+        if (!anchorPiece || !ings.some(ing => pieceMatchesIngredient(anchorPiece, ing))) {
+          // Anchor cannot participate in this form - skip.
+          continue;
+        }
+      }
+
+      let anchorAssigned = false;
+      for (const ing of ings) {
+        const label = ingredientLabel(ing);
+        if (anchorPiece && !anchorAssigned && !anchorPiece.used && pieceMatchesIngredient(anchorPiece, ing)) {
+          anchorPiece.used = true;
+          anchorAssigned = true;
+          rows.push({ label, ok: true });
+          okCount++;
+          continue;
+        }
+        const match = pieces.find(p => !p.used && pieceMatchesIngredient(p, ing));
+        if (match) {
+          match.used = true;
+          rows.push({ label, ok: true });
+          okCount++;
+        } else {
+          rows.push({ label, ok: false });
+        }
+      }
+
+      if (anchorKey && !anchorAssigned) continue;
+
+      const complete = okCount === ings.length;
+      const candidate = { complete, usedAlt: useAlt, rows, okCount, total: ings.length };
+      if (!best
+          || candidate.complete && !best.complete
+          || candidate.okCount > best.okCount
+          || (candidate.okCount === best.okCount && !candidate.usedAlt && best.usedAlt)) {
+        best = candidate;
+      }
+      if (complete) break;
+    }
+
+    return best;
   }
 
   // Perform board combination using the full RECIPES table.
@@ -2404,10 +2471,11 @@ function draw(now = performance.now()) {
     ctx.textAlign = 'center';
 
     if (g.isCombo) {
+      const cdef = COMBO_GEMS[g.type] || {};
       ctx.font = 'bold 8px system-ui';
-      ctx.fillText(COMBO_GEMS[g.type].short, cx, cy + 3);
+      ctx.fillText(cdef.short || cdef.icon || (g.type && g.type[0]) || '?', cx, cy + 3);
 
-      if (COMBO_GEMS[g.type].tiers) {
+      if (cdef.tiers) {
         ctx.font = '7px system-ui';
         ctx.fillText((g.level || 0) + 1, cx, cy + 11);
       }
@@ -2634,11 +2702,11 @@ function drawGemChoiceOverlay(now) {
     ctx.textBaseline = 'middle';
 
     if (h.action === 'choose' && h.opt) {
-      const def = GEM_TYPES[h.opt.type];
-      const lvl = GEM_LEVELS[h.opt.level];
-      ctx.fillStyle = def.colour;
+      const def = GEM_TYPES[h.opt.type] || {};
+      const lvl = GEM_LEVELS[h.opt.level] || '';
+      ctx.fillStyle = def.colour || '#eee';
       ctx.font = `bold ${Math.round(cell * 0.45)}px system-ui`;
-      ctx.fillText(def.icon || h.opt.type[0], h.cx, h.cy - cell * 0.22);
+      ctx.fillText(def.icon || (h.opt.type && h.opt.type[0]) || '?', h.cx, h.cy - cell * 0.22);
       ctx.fillStyle = '#eee';
       ctx.font = `bold ${Math.round(cell * 0.22)}px system-ui`;
       ctx.fillText(lvl, h.cx, h.cy + cell * 0.12);
@@ -2879,7 +2947,9 @@ function statLinesFromStats(s) {
 }
 
 function statsLine(type, level) {
-  return statLinesFromStats(GEM_TYPES[type].levels[level]);
+  const def = GEM_TYPES[type];
+  if (!def || !def.levels || !def.levels[level]) return [];
+  return statLinesFromStats(def.levels[level]);
 }
 
 function relevantCombos(type, quality, isCombo = false) {
@@ -2935,6 +3005,51 @@ function comboAvailability(combo, counts) {
 // Tooltip
 // ---------------------------------------------------------------------------
 
+function renderCombinationOptionsHtml(gemKey, type, quality, isCombo) {
+  const availableNow = recipesAvailableForAnchor(gemKey);
+  const further = relevantCombos(type, quality, isCombo);
+
+  let html = `<div class="section-title">Combination options</div>`;
+
+  if (availableNow.length) {
+    for (const name of availableNow) {
+      html += `<div class="combo"><span class="combo-name">${name}</span> <span class="ok">&#10003; Ready to combine</span></div>`;
+    }
+  }
+
+  // Incomplete recipes this gem is part of - show missing ingredients
+  for (const c of further) {
+    if (availableNow.includes(c.name)) continue;
+    const progress = getRecipeProgress(c.name, gemKey);
+    if (!progress) continue;
+
+    const missing = progress.rows.filter(r => !r.ok).map(r => r.label);
+    const have = progress.rows.filter(r => r.ok).map(r => r.label);
+
+    html += `<div class="combo">
+               <span class="combo-name">${c.name}</span>
+               <span class="miss">&#10007; ${progress.okCount}/${progress.total}</span>`;
+    if (have.length) {
+      html += have.map(l => `<span class="ing ok">\u2713 ${l}</span>`).join('');
+    }
+    if (missing.length) {
+      html += missing.map(l => `<span class="ing miss">\u2715 Need ${l}</span>`).join('');
+    }
+    if (progress.usedAlt) {
+      html += `<span class="ing" style="color:#888">(alt recipe)</span>`;
+    }
+    html += `</div>`;
+  }
+
+  if (!availableNow.length && !further.length) {
+    html += `<div class="stats-line" style="color:#777">
+               Not an ingredient in any further recipe.
+             </div>`;
+  }
+
+  return html;
+}
+
 function showTooltip(clientX, clientY, gemKey) {
   const g = gems.get(gemKey);
 
@@ -2946,11 +3061,11 @@ function showTooltip(clientX, clientY, gemKey) {
   let html;
 
   if (g.isCombo) {
-    const def = COMBO_GEMS[g.type];
+    const def = COMBO_GEMS[g.type] || {};
     const info = getGemStats(g);
 
-    html = `<h3 style="color:${def.colour}">&#10024; ${info.name}</h3>`;
-    html += `<div class="stats-line" style="color:#999">${def.role}</div>`;
+    html = `<h3 style="color:${def.colour || info.colour || '#ff00ff'}">&#10024; ${info.name}</h3>`;
+    html += `<div class="stats-line" style="color:#999">${def.role || info.role || 'Special'}</div>`;
     if (def.tiers) {
       html += `<div class="stats-line" style="color:#777">Tier ${( g.level || 0) + 1} of ${def.tiers.length}</div>`;
     }
@@ -2958,49 +3073,20 @@ function showTooltip(clientX, clientY, gemKey) {
       .map(l => `<div class="stats-line">${l}</div>`)
       .join('');
 
-    // Combo towers can still be ingredients in higher recipes
-    const availableNow = recipesAvailableForAnchor(gemKey);
-    const further = relevantCombos(g.type, null, true);
-    html += `<div class="section-title">Combination options</div>`;
-    if (availableNow.length) {
-      for (const name of availableNow) {
-        html += `<div class="combo"><span class="combo-name">${name}</span> <span class="ok">&#10003; Ready</span></div>`;
-      }
-    } else if (further.length) {
-      for (const c of further) {
-        html += `<div class="combo"><span class="combo-name">${c.name}</span> <span class="miss">&#10007; Need more</span></div>`;
-      }
-    } else {
-      html += `<div class="stats-line" style="color:#777">Not an ingredient in further recipes.</div>`;
-    }
+    // Combo towers can still be ingredients in higher recipes - list
+    // exactly which ingredients are still missing for each next recipe.
+    html += renderCombinationOptionsHtml(gemKey, g.type, null, true);
   } else {
     const quality = GEM_LEVELS[g.level];
-    const combos = relevantCombos(g.type, quality, false);
-    const availableNowBase = recipesAvailableForAnchor(gemKey);
+    const typeDef = GEM_TYPES[g.type] || {};
 
-    html = `<h3 style="color:${GEM_TYPES[g.type].colour}">${quality} ${g.type}</h3>`;
-    html += `<div class="stats-line" style="color:#999">${GEM_TYPES[g.type].role}</div>`;
+    html = `<h3 style="color:${typeDef.colour || '#fff'}">${quality} ${g.type}</h3>`;
+    html += `<div class="stats-line" style="color:#999">${typeDef.role || ''}</div>`;
     html += statsLine(g.type, g.level)
       .map(l => `<div class="stats-line">${l}</div>`)
       .join('');
 
-    html += `<div class="section-title">Combination options</div>`;
-    if (availableNowBase.length) {
-      for (const name of availableNowBase) {
-        html += `<div class="combo"><span class="combo-name">${name}</span> <span class="ok">&#10003; Ready to combine</span></div>`;
-      }
-    }
-    if (combos.length) {
-      for (const c of combos) {
-        if (availableNowBase.includes(c.name)) continue;
-        html += `<div class="combo"><span class="combo-name">${c.name}</span> <span class="miss">&#10007; Need more</span></div>`;
-      }
-    }
-    if (!availableNowBase.length && !combos.length) {
-      html += `<div class="stats-line" style="color:#777">
-                 ${quality} ${g.type} isn't an ingredient in any recipe.
-               </div>`;
-    }
+    html += renderCombinationOptionsHtml(gemKey, g.type, quality, false);
   }
 
   const tip = $('tooltip');
@@ -3097,48 +3183,45 @@ function validateRecipes() {
 }
 
 function recipeAvailabilityForDisplay(recipe) {
-  // Full check against RECIPES (handles multi-count, combo ingredients, altSubstitute).
-  // Prefer "any anchor" availability: if ANY board gem can complete this recipe, mark available.
-  let allOk = false;
-  for (const k of gems.keys()) {
-    if (findIngredientsForRecipe(recipe.name, k)) {
-      allOk = true;
-      break;
-    }
+  // Exclusive ingredient matching via getRecipeProgress (no forced anchor).
+  const progress = getRecipeProgress(recipe.name, null);
+  if (progress) {
+    return {
+      allOk: progress.complete,
+      rows: progress.rows.map(r => ({
+        label: r.ok ? r.label : `Need ${r.label}`,
+        ok: r.ok
+      })).concat(
+        progress.usedAlt
+          ? [{ label: '(using alt recipe)', ok: true }]
+          : (recipe.altSubstitute
+              ? [{ label: `alt available: ${(recipe.altSubstitute.with || []).map(c => {
+                    const p = parseIngredientCode(c);
+                    return p ? `${p.q[0]}${p.t[0]}` : c;
+                  }).join('+')} instead of ${recipe.altSubstitute.replace}`, ok: false }]
+              : [])
+      )
+    };
   }
 
-  // For the ingredient rows, do a soft per-ingredient presence check (not exclusive).
+  // Fallback soft check if progress could not be computed
   const counts = boardCounts();
   const comboCounts = new Map();
   for (const g of gems.values()) {
     if (g.isCombo) comboCounts.set(g.type, (comboCounts.get(g.type) || 0) + 1);
   }
-
   const rows = [];
+  let allOk = true;
   for (const req of recipe.requires) {
     let ok = false;
     if (req.isCombo) {
       ok = (comboCounts.get(req.t || req.label) || 0) >= 1;
     } else {
-      const kk = `${req.q} ${req.t}`;
-      ok = (counts.get(kk) || 0) >= 1;
+      ok = (counts.get(`${req.q} ${req.t}`) || 0) >= 1;
     }
+    if (!ok) allOk = false;
     rows.push({ label: req.label, ok });
   }
-
-  // Note alt substitute if present
-  if (recipe.altSubstitute) {
-    const alt = recipe.altSubstitute;
-    const withLabels = (alt.with || []).map(c => {
-      const p = parseIngredientCode(c);
-      return p ? `${p.q} ${p.t}` : c;
-    });
-    rows.push({
-      label: `alt: ${withLabels.join(' + ')} instead of ${alt.replace}`,
-      ok: false // informational only
-    });
-  }
-
   return { allOk, rows };
 }
 
