@@ -1,348 +1,478 @@
 // js/definitions/comboGems.js
 //
-// Special (combination) gem definitions, ported from the original Gem Tower
-// Defense special-gem list: https://gemtowerdefense.fandom.com/wiki/Special_gems
+// STATUS: DATA ONLY. This is a wholesale replacement of the old 13-gem combo
+// system with the full "Advanced towers" tree you supplied (44 towers: 38
+// combined + 6 secret). It is NOT wired into the crafting engine yet - see
+// the note at the bottom of this file for what that needs.
 //
-// Every gem is upgradeable in place via `tiers`: gem.level indexes into the
-// array (0 = base combo). Each tier is a full stat block plus `upgradeCost`
-// (gold cost to reach the NEXT tier; null on the final tier).
+// Structural differences from the old system, and why the old engine can't
+// run this data as-is:
+//   - Recipes can require OTHER COMBO TOWERS as ingredients (Silver Knight
+//     needs a Silver), several tiers deep in places (Malachite -> Vivid
+//     Malachite -> Uranium-238 -> Uranium-235 -> Depleted-Kyparium). The old
+//     engine only ever matches a fixed roll of 3 base gems against a flat
+//     recipe list.
+//   - Some recipes have an ALTERNATE form (the "|" lines) - see
+//     `altSubstitute` below.
+//   - Recipes can have more than 3 ingredients (Yaphets Stone and Burning
+//     Stone use 4; several final-tier recipes use 6 when you count the
+//     alternate substitution).
+//   - Each tower here is a single stat block (no in-place tiers/levels of
+//     its own) - progression happens by re-combining into the next named
+//     tower, not by upgrading in place. Because of that these use `stats`
+//     (a flat object), not `tiers` (an array) - getGemStats() already falls
+//     back to `def.stats` when `def.tiers` is absent, so a combo gem
+//     defined this way will render correctly once one exists on the board.
 //
-// Mechanics beyond the basic-gem set, and which tier fields drive them:
-//   maxTargets: Infinity        - hits every creep in range (Mighty Malachite)
-//   critChance / critMult       - chance to multiply a hit's damage
-//   stunChance / stunDur        - chance to stun the target (ms)
-//   armourReduction             - flat armour reduction, STACKS per hit (Gold, Red Crystal)
-//   auraArmourReduction/auraRadius - continuous armour-reduction aura, does NOT
-//                                  stack, only applies while a creep is in range (Tourmaline)
-//   auraSlowPct/auraRadius      - continuous area slow, refreshed every frame a
-//                                  creep is in range (Uranium)
-//   auraDamagePct/auraRadius    - continuous damage buff to towers in range,
-//                                  recalculated every frame (Yellow Sapphire)
-//   snapshotBuffPct/snapshotBuffRadius - ONE-TIME damage buff applied to towers
-//                                  in range at the moment this tier is reached;
-//                                  towers placed later get nothing (Black Opal)
-//   killScalePct                - permanent damage bonus per confirmed kill by
-//                                  this gem (Star Ruby)
-//   ignoresBuffs                 - excluded from damage-buff auras/snapshots
-//                                  (Star Ruby)
-//   goldOnHitChance              - chance per hit to award floor(round/2) gold
-//                                  (Lucky Asian Jade)
-//   burnChance/burnTotal/burnDur - chance to apply a flat, unmitigated DoT that
-//                                  ignores armour, magic resist, buffs and kill
-//                                  scaling (Ancient Blood Stone)
-//   manaRegen/manaCap/manaCost/manaChance/manaBurstTotal/manaBurstDur - mana
-//                                  pool that gates a bonus burst DoT (Tourmaline)
-//   flyingOnly (top-level def flag) - can only target flying creeps (Red Crystal)
+// RECIPE FORMAT
+//   ingredients: array of either
+//     - a base-gem code string, e.g. 'B4' = letter + tier digit (1-6).
+//       Letter -> GEM_TYPES key: B=Sapphire, D=Diamond, E=Opal, G=Emerald,
+//       P=Amethyst, Q=Aquamarine, R=Ruby, Y=Topaz. Digit 1-6 -> GEM_LEVELS
+//       index 0-5 (digit - 1).
+//     - { combo: 'Tower Name' } - another entry in COMBO_GEMS.
+//   altSubstitute (optional): { replace: 'X6', with: ['X1','X2','X3','X4','X5'] }
+//     - lets the recipe be completed with one of each of tiers 1-5 of that
+//       gem letter sitting on the board simultaneously, instead of a single
+//       tier-6 gem. Confirmed pattern across every "| ..." line in the
+//       source: the substitution always targets exactly one of the
+//       recipe's tier-6 ingredients, matched by letter.
 //
-// A number of exact values are not published on the wiki page (no stat table
-// was given for Silver, Star Ruby or Yellow Sapphire; some upgrade costs and
-// most damage TYPES are unstated for every gem). Those are marked ESTIMATE in
-// the comments below and should be treated as placeholders pending real data
-// or your own balancing pass, per the "reproduce first, playtest, balance
-// later" plan.
+// ABILITY FIELDS
+// Fields that map onto mechanics the engine already has (splashPct/
+// splashRadius, slowFlat/slowDur, poisonDps/poisonDur, armourReduction,
+// auraArmourReduction/auraRadius, auraSlowPct/auraRadius, auraDamagePct/
+// auraRadius, auraPct [attack-speed aura, radius from the gem-type-level
+// `auraRadius`], critChance/critMult, stunChance/stunDur, maxTargets,
+// trueDamage) are wired exactly as those mechanics already work for the
+// old combo gems and basic gems.
+//
+// Fields prefixed `NEW_` are abilities this engine has no mechanic for yet
+// at all (chain/forked lightning, petrification, range-buff auras,
+// evasion-bypass auras, gold-multiplier auras, on-hit splash-slow, a
+// self-disarm chance, "resist magic"/heal-the-castle - the last two don't
+// obviously map onto anything this prototype tracks, since towers are
+// never themselves attacked and there's no castle-HP concept here). The
+// raw source values are stored so nothing has to be re-derived later, but
+// none of them do anything in combat yet.
+//
+// A few abilities in the source have no tooltip at all (e10001, e10002,
+// etc. - empty Name/Tooltip rows) - these are skipped entirely as
+// unknown/unrecoverable rather than guessed at.
+//
+// "Pierce Spell Immunity: true" on several towers is flagged as
+// `piercesMagicImmune: true` (source-confirmed) but not wired - the engine
+// currently blocks all magic damage outright on magicImmune creeps in
+// mitigateDamage(), with no bypass mechanism yet.
+//
+// A couple of numeric mismatches between a tooltip's rounded English and
+// its Raw tag are called out inline; Raw is treated as authoritative for
+// exact numbers since it's the literal applied value, not player-facing
+// rounding - flagged rather than silently picking one.
+//
+// RANGE_SCALE: same convention as gemTypes.js (0.2), so these towers sit in
+// the same visual/tactical scale as everything else already on the board.
+export const RANGE_SCALE = 0.2;
+const R = n => Math.round(n * RANGE_SCALE);
 
 export const COMBO_GEMS = {
 
-  "Malachite": {
-    colour: '#10ac84',
-    icon: '🔗',
-    short: 'MLC',
-    role: 'Multi-Target',
-    // Damage type ESTIMATE: not stated on the wiki. Two of three ingredients
-    // (Opal, Emerald) are magic, one (Aquamarine) is physical - set to magic.
-    tiers: [
-      { name: 'Malachite',        dmgMin: 6,  dmgMax: 6,   cooldown: 500, range: 107, maxTargets: 3,        damageType: 'magic', upgradeCost: 25 },
-      { name: 'Vivid Malachite',  dmgMin: 11, dmgMax: 11,  cooldown: 500, range: 114, maxTargets: 4,        damageType: 'magic', upgradeCost: 280 },
-      { name: 'Mighty Malachite', dmgMin: 45, dmgMax: 45,  cooldown: 550, range: 114, maxTargets: Infinity, damageType: 'magic', upgradeCost: null }
-    ]
-  },
-
   "Silver": {
-    colour: '#c0c0c0',
-    icon: '🌙',
-    short: 'SLV',
-    role: 'Splash Damage',
-    // ESTIMATE: the wiki gives only the 36 splash range for Silver - no
-    // damage/cooldown/range/damage-type table, and no upgrade path is
-    // mentioned. Numbers below are placeholders sized to match Malachite's
-    // base (Chipped-tier) combo.
-    tiers: [
-      { name: 'Silver', dmgMin: 8, dmgMax: 12, cooldown: 750, range: 107, damageType: 'physical', splashRadius: 36, upgradeCost: null }
-    ]
+    colour: '#c0c0c0', icon: '🌙', short: 'SLV', role: 'Slowing',
+    stats: { dmgMin: 30, dmgMax: 30, cooldown: 1000, range: R(600), damageType: 'magic',
+      slowFlat: 90, slowDur: 1200 } // slowDur ESTIMATE, see file header
   },
 
-  "Star Ruby": {
-    colour: '#c62828',
-    icon: '✴️',
-    short: 'STR',
-    role: 'Kill-Scaling Damage',
-    // ESTIMATE: no stat table given. killScalePct is invented (wiki only
-    // says "damage benefits from kills", no rate) - flagged for balancing.
-    // ignoresBuffs reflects the wiki's "not affected by ... any of the opals".
-    tiers: [
-      { name: 'Star Ruby', dmgMin: 16, dmgMax: 22, cooldown: 800, range: 110, damageType: 'physical', killScalePct: 0.005, ignoresBuffs: true, upgradeCost: null }
-    ]
-  },
-
-  "Jade": {
-    colour: '#00b894',
-    icon: '🍀',
-    short: 'JD',
-    role: 'Poison + Slow + Economy',
-    // Fully specified on the wiki. The "50% slowdown" is bundled with the
-    // poison tick, so it's applied for the same duration as the poison.
-    tiers: [
-      { name: 'Jade',             dmgMin: 30, dmgMax: 35, cooldown: 500, range: 114, damageType: 'magic', poisonDps: 5,  poisonDur: 2000, slowPct: 0.50, slowDur: 2000, upgradeCost: 45 },
-      { name: 'Asian Jade',       dmgMin: 50, dmgMax: 50, cooldown: 500, range: 114, damageType: 'magic', poisonDps: 10, poisonDur: 3000, slowPct: 0.50, slowDur: 3000, upgradeCost: 250 },
-      { name: 'Lucky Asian Jade', dmgMin: 55, dmgMax: 55, cooldown: 350, range: 121, damageType: 'magic', poisonDps: 10, poisonDur: 4000, slowPct: 0.50, slowDur: 4000,
-        goldOnHitChance: 0.01, stunChance: 0.01, stunDur: 2000, critChance: 0.05, critMult: 4, upgradeCost: null }
-    ]
-  },
-
-  "Red Crystal": {
-    colour: '#e74c3c',
-    icon: '🦇',
-    short: 'RC',
-    role: 'Flying-Only / Air Armour Reduction',
-    flyingOnly: true,
-    // Damage type and both upgrade costs are ESTIMATE - the wiki's table has
-    // no damage-type column and no "upgrade cost" column for this gem.
-    tiers: [
-      { name: 'Red Crystal',         dmgMin: 50,  dmgMax: 75,  cooldown: 800, range: 186, damageType: 'physical', armourReduction: 4, upgradeCost: 150 },
-      { name: 'Red Crystal Facet',   dmgMin: 75,  dmgMax: 100, cooldown: 800, range: 200, damageType: 'physical', armourReduction: 5, upgradeCost: 300 },
-      { name: 'Rose Quartz Crystal', dmgMin: 100, dmgMax: 125, cooldown: 800, range: 214, damageType: 'physical', armourReduction: 6, upgradeCost: null }
-    ]
-  },
-
-  "Black Opal": {
-    colour: '#2c2c54',
-    icon: '⬛',
-    short: 'BO',
-    role: 'Damage Aura + Single Target',
-    // Damage type ESTIMATE. Everything else (damage, range, cooldown, upgrade
-    // cost, buff %, buff radius) is straight from the wiki, including the
-    // "snapshot" behaviour: Mystic Black Opal buffs only the towers that were
-    // already in its 171 range at the moment of upgrade.
-    tiers: [
-      { name: 'Black Opal',        dmgMin: 24, dmgMax: 25, cooldown: 1000, range: 114, damageType: 'physical', upgradeCost: 250 },
-      { name: 'Mystic Black Opal', dmgMin: 70, dmgMax: 70, cooldown: 1000, range: 143, damageType: 'physical', snapshotBuffPct: 0.40, snapshotBuffRadius: 171, upgradeCost: null }
-    ]
-  },
-
-  "Blood Stone": {
-    colour: '#7f1d1d',
-    icon: '🔥',
-    short: 'BS',
-    role: 'AoE + Burn',
-    // Damage type ESTIMATE. The wiki notes the burn itself "isn't reduced by
-    // armor... doesn't benefit from kills or black opal" - implemented as a
-    // flat unmitigated DoT via burnChance/burnTotal/burnDur, independent of
-    // damageType. Mana is tracked (manaRegen) for tooltip flavour only - the
-    // wiki itself calls the exact mana-gating "difficult to judge", so the
-    // crit/burn procs here trigger by chance alone, not mana-gated.
-    tiers: [
-      { name: 'Blood Stone',       dmgMin: 68,  dmgMax: 68,  cooldown: 500, range: 100, damageType: 'physical', splashRadius: 57, upgradeCost: 250 },
-      { name: 'Ancient Blood Stone', dmgMin: 160, dmgMax: 240, cooldown: 800, range: 100, damageType: 'physical', splashRadius: 57,
-        critChance: 0.15, critMult: 3, burnChance: 0.10, burnTotal: 2500, burnDur: 5000, manaRegen: 2, manaCap: 10, upgradeCost: null }
-    ]
-  },
-
-  "Dark Emerald": {
-    colour: '#1e5631',
-    icon: '💫',
-    short: 'DE',
-    role: 'Single Target + Stun',
-    // Damage type ESTIMATE (emerald-line). Stun %, duration, crit % and
-    // multiplier are straight from the wiki.
-    tiers: [
-      { name: 'Dark Emerald',      dmgMin: 90,  dmgMax: 150, cooldown: 800, range: 79,  damageType: 'magic', stunChance: 0.125, stunDur: 1500, upgradeCost: 250 },
-      { name: 'Enchanted Emerald', dmgMin: 100, dmgMax: 200, cooldown: 700, range: 100, damageType: 'magic', stunChance: 0.15,  stunDur: 2000, critChance: 0.15, critMult: 4, upgradeCost: null }
-    ]
-  },
-
-  "Gold": {
-    colour: '#f1c40f',
-    icon: '🪙',
-    short: 'GLD',
-    role: 'Armour Reduction',
-    // Damage type ESTIMATE ("violet" in the source's colour system, which we
-    // don't model - treated as physical). Armour reduction stacks per hit.
-    tiers: [
-      { name: 'Gold',          dmgMin: 160, dmgMax: 190, cooldown: 1000, range: 114, damageType: 'physical', armourReduction: 5, critChance: 0.25, critMult: 2, goldBonusChance: 0.01, goldBonusAmount: 100, upgradeCost: 210 },
-      { name: 'Egyptian Gold', dmgMin: 160, dmgMax: 200, cooldown: 750,  range: 114, damageType: 'physical', armourReduction: 8, critChance: 0.30, critMult: 2, goldBonusChance: 0.01, goldBonusAmount: 100, upgradeCost: null }
-    ]
+  "Silver Knight": {
+    colour: '#b0b8c0', icon: '🛡️', short: 'SK', role: 'Cleave + Slow',
+    stats: { dmgMin: 100, dmgMax: 100, cooldown: 800, range: R(700), damageType: 'physical',
+      splashPct: 0.50, splashRadius: R(400), slowFlat: 120, slowDur: 1200 }
   },
 
   "Pink Diamond": {
-    colour: '#f8bbd0',
-    icon: '💗',
-    short: 'PD',
-    role: 'High Single-Target Damage',
-    // trueDamage ESTIMATE - the wiki doesn't say, but both ingredients and
-    // predecessor are Diamond, whose defining trait is armour-piercing true
-    // damage, so this carries it forward as a judgement call.
-    tiers: [
-      { name: 'Pink Diamond',       dmgMin: 150, dmgMax: 175, cooldown: 750, range: 114, damageType: 'physical', trueDamage: true, critChance: 0.10, critMult: 5, upgradeCost: 175 },
-      { name: 'Great Pink Diamond', dmgMin: 175, dmgMax: 225, cooldown: 650, range: 121, damageType: 'physical', trueDamage: true, critChance: 0.10, critMult: 8, upgradeCost: null }
-    ]
+    colour: '#f8bbd0', icon: '💗', short: 'PD', role: 'Crit',
+    stats: { dmgMin: 110, dmgMax: 110, cooldown: 1000, range: R(600), damageType: 'physical', // 30 base + 80 bonus
+      critChance: 0.10, critMult: 5, piercesMagicImmune: true }
   },
 
-  "Uranium": {
-    colour: '#8bc34a',
-    icon: '☢️',
-    short: 'URN',
-    role: 'Area Slow',
-    // Damage type and upgrade cost ESTIMATE. Slow is a continuous area aura
-    // (auraSlowPct/auraRadius), not an on-hit slow, per the wiki's "slows
-    // enemies within range/area". Uranium 235's aura radius is kept equal to
-    // Uranium 238's since the wiki only says the 235 slow-area is "smaller
-    // than full [attack] range" without giving the actual number.
-    tiers: [
-      { name: 'Uranium 238', dmgMin: 47, dmgMax: 47, cooldown: 250, range: 64, damageType: 'physical', auraSlowPct: 0.50, auraRadius: 64, upgradeCost: 200 },
-      { name: 'Uranium 235', dmgMin: 64, dmgMax: 64, cooldown: 250, range: 85, damageType: 'physical', auraSlowPct: 0.50, auraRadius: 64, upgradeCost: null }
-    ]
+  "Huge Pink Diamond": {
+    colour: '#f48fb1', icon: '💗', short: 'HPD', role: 'Cleave + Crit + Slow',
+    stats: { dmgMin: 310, dmgMax: 310, cooldown: 800, range: R(700), damageType: 'physical', // 150 + 160
+      splashPct: 0.50, splashRadius: R(400), critChance: 0.10, critMult: 5, piercesMagicImmune: true,
+      slowFlat: 120, slowDur: 1200 }
+  },
+
+  "Koh-i-noor Diamond": {
+    colour: '#ffffff', icon: '💎', short: 'KD', role: 'Cleave + Crit + Armour Shred',
+    stats: { dmgMin: 1300, dmgMax: 1300, cooldown: 600, range: R(700), damageType: 'physical', // 660 + 640
+      splashPct: 0.50, splashRadius: R(400), critChance: 0.10, critMult: 5, piercesMagicImmune: true,
+      armourReduction: 64 }
+  },
+
+  "Malachite": {
+    colour: '#10ac84', icon: '🔗', short: 'MLC', role: 'Multi-Target',
+    stats: { dmgMin: 15, dmgMax: 15, cooldown: 800, range: R(600), damageType: 'magic', maxTargets: 3 }
+  },
+
+  "Vivid Malachite": {
+    colour: '#0e9c76', icon: '🔗', short: 'VMLC', role: 'Multi-Target',
+    stats: { dmgMin: 50, dmgMax: 50, cooldown: 700, range: R(700), damageType: 'magic', maxTargets: 5 }
+  },
+
+  "Uranium-238": {
+    colour: '#8bc34a', icon: '☢️', short: 'U238', role: 'Multi-Target',
+    stats: { dmgMin: 120, dmgMax: 120, cooldown: 700, range: R(700), damageType: 'physical', maxTargets: 10 }
+  },
+
+  "Uranium-235": {
+    colour: '#7cb342', icon: '☢️', short: 'U235', role: 'Multi-Target',
+    stats: { dmgMin: 220, dmgMax: 220, cooldown: 700, range: R(800), damageType: 'physical', maxTargets: 10 } // 60 + 160
+  },
+
+  "Depleted-Kyparium": {
+    colour: '#689f38', icon: '☢️', short: 'DK', role: 'Multi-Target',
+    stats: { dmgMin: 410, dmgMax: 410, cooldown: 400, range: R(5000), damageType: 'physical', maxTargets: 10 } // 90 + 320
+  },
+
+  "Asteriated Ruby": {
+    colour: '#ad1457', icon: '🔥', short: 'AR', role: 'Burn Aura',
+    auraRadius: R(400), // NEW_auraBurn radius - not read anywhere yet
+    stats: { dmgMin: 0, dmgMax: 0, cooldown: 1000, range: R(600), damageType: 'physical',
+      NEW_auraBurnDps: 60, NEW_auraBurnRadius: R(400) }
+  },
+
+  "Volcano": {
+    colour: '#c2185b', icon: '🌋', short: 'VLC', role: 'Burn Aura',
+    auraRadius: R(500),
+    stats: { dmgMin: 0, dmgMax: 0, cooldown: 1000, range: R(600), damageType: 'physical',
+      NEW_auraBurnDps: 320, NEW_auraBurnRadius: R(500) }
+  },
+
+  "Bloodstone": {
+    colour: '#7f1d1d', icon: '🩸', short: 'BLS', role: 'Chain Lightning',
+    stats: { dmgMin: 35, dmgMax: 35, cooldown: 1000, range: R(700), damageType: 'physical',
+      NEW_chainChance: 0.30, NEW_chainDamage: 150, NEW_chainRadius: R(1000), NEW_chainBounces: 5,
+      piercesMagicImmune: false }
+  },
+
+  "Antique Bloodstone": {
+    colour: '#5d1414', icon: '🩸', short: 'ABLS', role: 'Forked Lightning + Burn Aura',
+    auraRadius: R(500),
+    stats: { dmgMin: 70, dmgMax: 70, cooldown: 1000, range: R(800), damageType: 'physical',
+      NEW_forkChance: 0.25, NEW_forkDamage: 2500, NEW_forkTargets: 5, NEW_forkStartRadius: R(100), NEW_forkEndRadius: R(3000),
+      NEW_auraBurnDps: 320, NEW_auraBurnRadius: R(500), piercesMagicImmune: false }
+  },
+
+  "The Crown Prince": {
+    colour: '#4a0e0e', icon: '👑', short: 'TCP', role: 'Forked Lightning + Burn + Poison',
+    auraRadius: R(800),
+    stats: { dmgMin: 70, dmgMax: 70, cooldown: 1000, range: R(800), damageType: 'physical',
+      NEW_forkChance: 0.25, NEW_forkDamage: 2500, NEW_forkTargets: 5, NEW_forkStartRadius: R(100), NEW_forkEndRadius: R(3000),
+      NEW_auraBurnDps: 2500, NEW_auraBurnRadius: R(800), // tooltip value; Raw's "every 2s deals 5000" reads as a
+                                                          // source inconsistency (that's 2500 dps averaged anyway)
+      poisonDps: 128, poisonDur: 5000, piercesMagicImmune: false }
+  },
+
+  "Jade": {
+    colour: '#00b894', icon: '🍀', short: 'JD', role: 'Poison',
+    stats: { dmgMin: 10, dmgMax: 10, cooldown: 500, range: R(800), damageType: 'magic',
+      poisonDps: 16, poisonDur: 5000 }
+  },
+
+  "Quartz": {
+    colour: '#e1bee7', icon: '💠', short: 'QTZ', role: 'Anti-Air Aura',
+    auraRadius: R(600),
+    stats: { dmgMin: 15, dmgMax: 15, cooldown: 600, range: R(500), damageType: 'physical',
+      // Tooltip says "-150 speed", Raw tag says [MOVESPEED: -250] - used
+      // Raw as the authoritative applied value, tooltip flagged as likely
+      // a rounding/typo in the source.
+      NEW_antiFlyArmourReduction: 10, NEW_antiFlySlowFlat: 250, NEW_auraRadius: R(600) }
+  },
+
+  "Grey Jade": {
+    colour: '#80cbc4', icon: '🍀', short: 'GJD', role: 'Poison + Range Aura',
+    stats: { dmgMin: 30, dmgMax: 30, cooldown: 500, range: R(800), damageType: 'magic',
+      poisonDps: 32, poisonDur: 5000, NEW_auraRangeBonus: R(300), NEW_auraRangeRadius: R(290) }
+  },
+
+  "Monkey King Jade": {
+    colour: '#ffca28', icon: '🐵', short: 'MKJ', role: 'Poison + Range Aura + True Strike Aura',
+    stats: { dmgMin: 80, dmgMax: 80, cooldown: 500, range: R(1000), damageType: 'magic',
+      poisonDps: 32, poisonDur: 5000, NEW_auraRangeBonus: R(300), NEW_auraRangeRadius: R(290),
+      NEW_auraTrueStrikeRadius: R(300) }
+  },
+
+  "Diamond Cullinan": {
+    colour: '#eeeeee', icon: '✦', short: 'DC', role: 'Crit + Range Aura + True Strike Aura',
+    stats: { dmgMin: 3154, dmgMax: 3154, cooldown: 800, range: R(1200), damageType: 'physical', // 2514 + 640
+      critChance: 0.10, critMult: 5, piercesMagicImmune: true,
+      NEW_auraRangeBonus: R(300), NEW_auraRangeRadius: R(290), NEW_auraTrueStrikeRadius: R(300) }
+  },
+
+  "Lucky Chinese Jade": {
+    colour: '#a5d6a7', icon: '🍀', short: 'LCJ', role: 'Poison + Anti-Air Aura',
+    stats: { dmgMin: 30, dmgMax: 30, cooldown: 500, range: R(900), damageType: 'magic',
+      poisonDps: 32, poisonDur: 5000,
+      NEW_antiFlyArmourReduction: 10, NEW_antiFlySlowFlat: 250, NEW_auraRadius: R(600),
+      NEW_healCastleChance: 0.01 } // no castle-HP concept in this engine - not applicable
+  },
+
+  "Charming Lazurite": {
+    colour: '#5c6bc0', icon: '💠', short: 'CL', role: 'Anti-Air Aura',
+    stats: { dmgMin: 30, dmgMax: 30, cooldown: 600, range: R(800), damageType: 'physical',
+      NEW_antiFlyArmourReduction: 10, NEW_antiFlySlowFlat: 250, NEW_antiFlyMagicResistReduction: 0.50,
+      NEW_auraRadius: R(600), piercesMagicImmune: true }
+  },
+
+  "Golden Jubilee": {
+    colour: '#ffd54f', icon: '👑', short: 'GJ', role: 'Anti-Air Aura + Bonus Magic',
+    stats: { dmgMin: 1, dmgMax: 1, cooldown: 700, range: R(800), damageType: 'physical',
+      NEW_antiFlyArmourReduction: 10, NEW_antiFlySlowFlat: 250, NEW_antiFlyMagicResistReduction: 0.50,
+      NEW_auraRadius: R(600), NEW_bonusMagicDamagePct: 1.0 }
+  },
+
+  "Gold": {
+    colour: '#f1c40f', icon: '🪙', short: 'GLD', role: 'Armour Shred',
+    stats: { dmgMin: 60, dmgMax: 60, cooldown: 800, range: R(600), damageType: 'physical',
+      armourReduction: 32, piercesMagicImmune: true }
+  },
+
+  "Egypt Gold": {
+    colour: '#f9a825', icon: '🪙', short: 'EGLD', role: 'Armour Shred + Gold Aura',
+    stats: { dmgMin: 100, dmgMax: 100, cooldown: 800, range: R(700), damageType: 'physical',
+      armourReduction: 48, piercesMagicImmune: true,
+      NEW_auraGreedyChance: 0.05, NEW_auraGreedyMult: 10, NEW_auraRadius: R(800) }
+  },
+
+  "Dark Emerald": {
+    colour: '#1e5631', icon: '💫', short: 'DE', role: 'Stun',
+    stats: { dmgMin: 80, dmgMax: 80, cooldown: 500, range: R(700), damageType: 'magic',
+      stunChance: 0.10, stunDur: 2000 }
+  },
+
+  "Emerald Golem": {
+    colour: '#2e7d32', icon: '🗿', short: 'EG', role: 'Stun + Armour Shred + Petrify',
+    stats: { dmgMin: 170, dmgMax: 170, cooldown: 500, range: R(700), damageType: 'magic',
+      stunChance: 0.10, stunDur: 2000, armourReduction: 32, piercesMagicImmune: true,
+      NEW_stoneGazeChance: 0.01, NEW_stoneGazeRadius: R(1000), NEW_stoneGazeRootDur: 3000, NEW_stoneGazeBonusPhysicalPct: 1.0 }
+  },
+
+  "Paraiba Tourmaline": {
+    colour: '#26a69a', icon: '🌀', short: 'PT', role: 'Armour Aura',
+    stats: { dmgMin: 30, dmgMax: 30, cooldown: 600, range: R(600), damageType: 'physical',
+      auraArmourReduction: 15, auraRadius: R(800), piercesMagicImmune: false }
+  },
+
+  "Elaborately Carved Tourmaline": {
+    colour: '#00897b', icon: '🌀', short: 'ECT', role: 'Stun + Armour Aura',
+    stats: { dmgMin: 130, dmgMax: 130, cooldown: 600, range: R(700), damageType: 'physical',
+      stunChance: 0.10, stunDur: 2000, auraArmourReduction: 30, auraRadius: R(1200), piercesMagicImmune: true }
+  },
+
+  "Sapphire Star Of Adam": {
+    colour: '#1565c0', icon: '✡️', short: 'SSOA', role: 'Poison + Armour Shred + Armour Aura + Slow Splash',
+    stats: { dmgMin: 42, dmgMax: 42, cooldown: 1000, range: R(800), damageType: 'physical',
+      poisonDps: 128, poisonDur: 5000, armourReduction: 64,
+      auraArmourReduction: 30, auraRadius: R(1200), piercesMagicImmune: true,
+      NEW_onHitSplashSlowPct: 0.50, NEW_onHitSplashSlowRadius: R(300), NEW_onHitSplashSlowDur: 3000, NEW_disablesHealing: true }
+  },
+
+  "Deep Sea Pearl": {
+    colour: '#4fc3f7', icon: '🦪', short: 'DSP', role: 'Tower-Resist Aura',
+    stats: { dmgMin: 80, dmgMax: 80, cooldown: 600, range: R(500), damageType: 'physical',
+      NEW_auraTowerMagicImmuneRadius: R(600) } // no tower-takes-damage concept in this engine - not applicable
+  },
+
+  "Chrysoberyl Cat's Eye": {
+    colour: '#8d6e63', icon: '👁️', short: 'CCE', role: 'Attack Speed + Damage Aura',
+    auraRadius: R(664), // attack-speed aura radius (gem-type-level, matches Opal's convention)
+    stats: { dmgMin: 6, dmgMax: 6, cooldown: 1000, range: R(500), damageType: 'physical',
+      auraPct: 0.60, auraDamagePct: 0.50, auraRadius: R(500) } // per-tier auraRadius here drives auraDamagePct only
+  },
+
+  "Red Coral": {
+    colour: '#e53935', icon: '🪸', short: 'RCR', role: 'Attack Speed + Damage Aura + Tower-Resist Aura',
+    auraRadius: R(664),
+    // Source grants both aura4 (+50%) and aura5 (+60%) attack-speed at once;
+    // collapsed to the stronger one since a gem only has one auraPct slot.
+    stats: { dmgMin: 120, dmgMax: 120, cooldown: 600, range: R(500), damageType: 'physical',
+      auraPct: 0.60, auraDamagePct: 0.50, auraRadius: R(500),
+      NEW_auraTowerMagicImmuneRadius: R(600) }
+  },
+
+  "Natural Zumurud": {
+    colour: '#00c853', icon: '💚', short: 'NZ', role: 'Single-Target',
+    stats: { dmgMin: 80, dmgMax: 80, cooldown: 1000, range: R(500), damageType: 'physical' }
+  },
+
+  "Carmen-Lucia": {
+    colour: '#d32f2f', icon: '👑', short: 'CML', role: 'Attack Speed + Damage Aura + Tower-Resist Aura',
+    // Source stacks THREE attack-speed auras at different radii (aura6
+    // +70%@664, otomad +200%@200). Only one auraPct/auraRadius slot exists
+    // per gem, so this collapses to the strongest (otomad) - flagged as a
+    // simplification, the wider/weaker aura6 effect is dropped rather than
+    // silently averaged.
+    auraRadius: R(200),
+    stats: { dmgMin: 6, dmgMax: 6, cooldown: 1000, range: R(500), damageType: 'magic',
+      auraPct: 2.0, auraDamagePct: 0.50, auraRadius: R(500),
+      NEW_auraTowerMagicImmuneRadius: R(600) }
   },
 
   "Yellow Sapphire": {
-    colour: '#fdd835',
-    icon: '🌟',
-    short: 'YS',
-    role: 'Splash + Damage Buff',
-    // ESTIMATE throughout except the 57 splash range: the wiki gives no stat
-    // table for Yellow Sapphire at all, only that its buff aura is "roughly
-    // the same range as Black Opal" (171) and is always overridden by an
-    // active Black Opal snapshot buff (handled in the engine, not here).
-    tiers: [
-      { name: 'Yellow Sapphire', dmgMin: 90, dmgMax: 120, cooldown: 700, range: 114, damageType: 'physical', splashRadius: 57, auraDamagePct: 0.20, auraRadius: 171, upgradeCost: null }
-    ]
+    colour: '#fdd835', icon: '🌟', short: 'YS', role: 'Area Slow',
+    stats: { dmgMin: 20, dmgMax: 20, cooldown: 1000, range: R(600), damageType: 'physical',
+      auraSlowPct: 0.70, auraRadius: R(300) }
   },
 
-  "Tourmaline": {
-    colour: '#26a69a',
-    icon: '🌀',
-    short: 'TRM',
-    role: 'Single Target + Armour Reduction + Ability',
-    // Damage type and manaCap ESTIMATE. Everything else (damage, range,
-    // cooldown, aura armour reduction + radius, mana regen, ability cost/
-    // chance/burst) is from the wiki. The armour reduction is a continuous
-    // radius aura (not stacking), separate from its attack range.
-    tiers: [
-      { name: 'Tourmaline',         dmgMin: 10, dmgMax: 400, cooldown: 750, range: 121, damageType: 'physical',
-        auraArmourReduction: 4, auraRadius: 85.8, manaRegen: 1.75, manaCap: 10, manaCost: 5, manaChance: 0.20, manaBurstTotal: 200, manaBurstDur: 3000, upgradeCost: 350 },
-      { name: 'Paraiba Tourmaline', dmgMin: 30, dmgMax: 420, cooldown: 750, range: 125, damageType: 'physical',
-        auraArmourReduction: 6, auraRadius: 93,   manaRegen: 2,    manaCap: 10, manaCost: 5, manaChance: 0.20, manaBurstTotal: 250, manaBurstDur: 3000, upgradeCost: null }
-    ]
+  "Northern Saber's Eye": {
+    colour: '#4dd0e1', icon: '❄️', short: 'NSE', role: 'Area Slow + Chain Frost',
+    stats: { dmgMin: 60, dmgMax: 60, cooldown: 1000, range: R(500), damageType: 'physical',
+      auraSlowPct: 0.70, auraRadius: R(300),
+      NEW_chainFrostChance: 0.25, NEW_chainFrostBounces: 10, piercesMagicImmune: false }
+  },
+
+  "Star Sapphire": {
+    colour: '#81d4fa', icon: '⭐', short: 'SS', role: 'Slow + Area Slow + Attack Speed Aura',
+    auraRadius: R(664),
+    stats: { dmgMin: 20, dmgMax: 20, cooldown: 1000, range: R(600), damageType: 'physical',
+      slowFlat: 480, slowDur: 1200, auraSlowPct: 0.75, auraRadius: R(556), auraPct: 0.70 }
+  },
+
+  // ---- Secret towers ----
+
+  "Obsidian": {
+    colour: '#212121', icon: '🖤', short: 'OBS', role: 'Cleave + Slow',
+    stats: { dmgMin: 820, dmgMax: 820, cooldown: 800, range: R(800), damageType: 'physical', // 180 + 640
+      splashPct: 0.70, splashRadius: R(500), slowFlat: 180, slowDur: 1200 }
+  },
+
+  "Agate": {
+    colour: '#6d4c41', icon: '🟤', short: 'AGT', role: 'Multi-Target',
+    stats: { dmgMin: 430, dmgMax: 430, cooldown: 300, range: R(5000), damageType: 'physical', maxTargets: 5 } // 110 + 320
+  },
+
+  "Fantastic Miss Shrimp": {
+    colour: '#ff7043', icon: '🦐', short: 'FMS', role: 'Chain + Fork Lightning',
+    stats: { dmgMin: 1225, dmgMax: 1225, cooldown: 500, range: R(1000), damageType: 'physical', // 585 + 640
+      NEW_selfDisarmChance: 0.03, NEW_selfDisarmDur: 5000, // a self-debuff, kept for fidelity even though it's a downside
+      NEW_chainChance: 0.30, NEW_chainDamage: 150, NEW_chainRadius: R(1000), NEW_chainBounces: 5,
+      NEW_forkChance: 0.25, NEW_forkDamage: 2500, NEW_forkTargets: 5, NEW_forkStartRadius: R(100), NEW_forkEndRadius: R(3000),
+      piercesMagicImmune: false }
+  },
+
+  "Yaphets Stone": {
+    colour: '#37474f', icon: '🗿', short: 'YPS', role: 'Armour Shred + Armour Aura + Anti-Air Aura',
+    stats: { dmgMin: 140, dmgMax: 140, cooldown: 1000, range: R(800), damageType: 'physical',
+      auraArmourReduction: 30, auraRadius: R(1200), armourReduction: 64, piercesMagicImmune: true,
+      NEW_antiFlyArmourReduction: 64, NEW_antiFlySlowFlat: 480, NEW_antiFlyMagicResistReduction: 1.0, NEW_auraRadius: R(600) }
+  },
+
+  "Burning Stone": {
+    colour: '#bf360c', icon: '🔥', short: 'BNS', role: 'Burn Aura',
+    auraRadius: R(800),
+    stats: { dmgMin: 0, dmgMax: 0, cooldown: 500, range: R(600), damageType: 'physical',
+      NEW_auraBurnDps: 2500, NEW_auraBurnRadius: R(800) }
+  },
+
+  // Listed with full stats in the source but absent from its own "Secret
+  // towers" summary list, and given no Combination line at all (just "~
+  // ~") - kept in with `craftable: false` rather than guessing at a recipe.
+  "The Great Stone": {
+    colour: '#000000', icon: '⚫', short: 'TGS', role: 'Cleave + Crit', craftable: false,
+    stats: { dmgMin: 2009, dmgMax: 2009, cooldown: 1000, range: R(800), damageType: 'physical', // 1369 + 640
+      critChance: 0.10, critMult: 5, piercesMagicImmune: true, splashPct: 1.00, splashRadius: R(700) }
   }
 };
 
-export const COMBINATIONS = [
-  {
-    name: "Malachite",
-    requires: [
-      { q: "Chipped", t: "Opal" },
-      { q: "Chipped", t: "Emerald" },
-      { q: "Chipped", t: "Aquamarine" }
-    ]
-  },
-  {
-    name: "Silver",
-    requires: [
-      { q: "Chipped", t: "Sapphire" },
-      { q: "Chipped", t: "Diamond" },
-      { q: "Chipped", t: "Topaz" }
-    ]
-  },
-  {
-    name: "Star Ruby",
-    requires: [
-      { q: "Chipped", t: "Amethyst" },
-      { q: "Chipped", t: "Ruby" },
-      { q: "Flawed", t: "Ruby" }
-    ]
-  },
-  {
-    name: "Jade",
-    requires: [
-      { q: "Normal", t: "Emerald" },
-      { q: "Normal", t: "Opal" },
-      { q: "Flawed", t: "Sapphire" }
-    ]
-  },
-  {
-    name: "Red Crystal",
-    requires: [
-      { q: "Flawless", t: "Emerald" },
-      { q: "Normal", t: "Ruby" },
-      { q: "Flawed", t: "Amethyst" }
-    ]
-  },
-  {
-    name: "Black Opal",
-    requires: [
-      { q: "Perfect", t: "Opal" },
-      { q: "Flawless", t: "Diamond" },
-      { q: "Normal", t: "Aquamarine" }
-    ]
-  },
-  {
-    name: "Blood Stone",
-    requires: [
-      { q: "Perfect", t: "Ruby" },
-      { q: "Flawless", t: "Aquamarine" },
-      { q: "Normal", t: "Amethyst" }
-    ]
-  },
-  {
-    name: "Dark Emerald",
-    requires: [
-      { q: "Perfect", t: "Emerald" },
-      { q: "Flawless", t: "Sapphire" },
-      { q: "Flawed", t: "Topaz" }
-    ]
-  },
-  {
-    name: "Gold",
-    requires: [
-      { q: "Perfect", t: "Amethyst" },
-      { q: "Flawless", t: "Amethyst" },
-      { q: "Flawed", t: "Diamond" }
-    ]
-  },
-  {
-    name: "Pink Diamond",
-    requires: [
-      { q: "Perfect", t: "Diamond" },
-      { q: "Normal", t: "Diamond" },
-      { q: "Normal", t: "Topaz" }
-    ]
-  },
-  {
-    name: "Uranium",
-    requires: [
-      { q: "Perfect", t: "Topaz" },
-      { q: "Flawed", t: "Opal" },
-      { q: "Normal", t: "Sapphire" }
-    ]
-  },
-  {
-    name: "Yellow Sapphire",
-    requires: [
-      { q: "Perfect", t: "Sapphire" },
-      { q: "Flawless", t: "Ruby" },
-      { q: "Flawless", t: "Topaz" }
-    ]
-  },
-  {
-    name: "Tourmaline",
-    requires: [
-      { q: "Perfect", t: "Aquamarine" },
-      { q: "Flawless", t: "Opal" },
-      { q: "Flawed", t: "Aquamarine" },
-      { q: "Flawed", t: "Emerald" }
-    ]
-  }
-];
+export const RECIPES = {
+  "Silver":                        { ingredients: ['B1', 'Y1', 'D1'] },
+  "Silver Knight":                 { ingredients: [{ combo: 'Silver' }, 'Q2', 'R3'] },
+  "Pink Diamond":                  { ingredients: ['D5', 'Y3', 'D3'] },
+  "Huge Pink Diamond":             { ingredients: [{ combo: 'Pink Diamond' }, { combo: 'Silver Knight' }, { combo: 'Silver' }] },
+  "Koh-i-noor Diamond":            { ingredients: [{ combo: 'Huge Pink Diamond' }, 'P6', 'D6'],
+                                      altSubstitute: { replace: 'P6', with: ['P1', 'P2', 'P3', 'P4', 'P5'] } },
 
-// Legacy single-step upgrade text - unused now that every combo gem has a
-// `tiers` array, kept only so any old reference doesn't crash on import.
+  "Malachite":                     { ingredients: ['E1', 'Q1', 'G1'] },
+  "Vivid Malachite":               { ingredients: [{ combo: 'Malachite' }, 'D2', 'Y3'] },
+  "Uranium-238":                   { ingredients: ['Y5', 'E2', 'B3'] },
+  "Uranium-235":                   { ingredients: [{ combo: 'Uranium-238' }, { combo: 'Vivid Malachite' }, { combo: 'Malachite' }] },
+  "Depleted-Kyparium":             { ingredients: [{ combo: 'Uranium-235' }, 'Q6', 'Y6'],
+                                      altSubstitute: { replace: 'Q6', with: ['Q1', 'Q2', 'Q3', 'Q4', 'Q5'] } },
+
+  "Asteriated Ruby":               { ingredients: ['R2', 'R1', 'P1'] },
+  "Volcano":                       { ingredients: [{ combo: 'Asteriated Ruby' }, 'R4', 'P3'] },
+  "Bloodstone":                    { ingredients: ['R5', 'Q4', 'P3'] },
+  "Antique Bloodstone":            { ingredients: [{ combo: 'Bloodstone' }, { combo: 'Volcano' }, 'R2'] },
+  "The Crown Prince":              { ingredients: [{ combo: 'Antique Bloodstone' }, 'R6', 'G6'],
+                                      altSubstitute: { replace: 'R6', with: ['R1', 'R2', 'R3', 'R4', 'R5'] } },
+
+  "Jade":                          { ingredients: ['G3', 'E3', 'B2'] },
+  "Quartz":                        { ingredients: ['G4', 'R3', 'P2'] },
+  "Grey Jade":                     { ingredients: [{ combo: 'Jade' }, 'B4', 'Q3'] },
+  "Monkey King Jade":              { ingredients: [{ combo: 'Grey Jade' }, 'G4', 'P2'] },
+  "Diamond Cullinan":              { ingredients: [{ combo: 'Monkey King Jade' }, 'D6', 'B6'],
+                                      altSubstitute: { replace: 'D6', with: ['D1', 'D2', 'D3', 'D4', 'D5'] } },
+
+  "Lucky Chinese Jade":            { ingredients: [{ combo: 'Jade' }, { combo: 'Quartz' }, 'G3'] },
+  "Charming Lazurite":             { ingredients: [{ combo: 'Quartz' }, 'P4', 'Y2'] },
+  "Golden Jubilee":                { ingredients: [{ combo: 'Charming Lazurite' }, 'Y6', 'R6'],
+                                      altSubstitute: { replace: 'Y6', with: ['Y1', 'Y2', 'Y3', 'Y4', 'Y5'] } },
+
+  "Gold":                          { ingredients: ['P5', 'P4', 'D2'] },
+  "Egypt Gold":                    { ingredients: [{ combo: 'Gold' }, 'P5', 'Q2'] },
+  "Dark Emerald":                  { ingredients: ['G5', 'B4', 'Y2'] },
+  "Emerald Golem":                 { ingredients: [{ combo: 'Gold' }, { combo: 'Dark Emerald' }, 'D3'] },
+
+  "Paraiba Tourmaline":            { ingredients: ['Q5', 'E4', 'G2'] },
+  "Elaborately Carved Tourmaline": { ingredients: [{ combo: 'Paraiba Tourmaline' }, { combo: 'Dark Emerald' }, 'G2'] },
+  "Sapphire Star Of Adam":         { ingredients: [{ combo: 'Elaborately Carved Tourmaline' }, 'G6', 'P6'],
+                                      altSubstitute: { replace: 'G6', with: ['G1', 'G2', 'G3', 'G4', 'G5'] } },
+
+  "Deep Sea Pearl":                { ingredients: ['Q4', 'D4', 'E2'] },
+  "Chrysoberyl Cat's Eye":         { ingredients: ['E5', 'D4', 'Q3'] },
+  "Red Coral":                     { ingredients: [{ combo: "Chrysoberyl Cat's Eye" }, { combo: 'Deep Sea Pearl' }, 'E4'] },
+  "Natural Zumurud":               { ingredients: [{ combo: 'Deep Sea Pearl' }, 'G5', 'D3'] },
+  "Carmen-Lucia":                  { ingredients: [{ combo: 'Red Coral' }, 'E6', 'Q6'],
+                                      altSubstitute: { replace: 'E6', with: ['E1', 'E2', 'E3', 'E4', 'E5'] } },
+
+  "Yellow Sapphire":               { ingredients: ['B5', 'Y4', 'R4'] },
+  "Northern Saber's Eye":          { ingredients: [{ combo: 'Yellow Sapphire' }, { combo: 'Bloodstone' }, 'B5'] },
+  "Star Sapphire":                 { ingredients: [{ combo: 'Yellow Sapphire' }, 'B6', 'E6'],
+                                      altSubstitute: { replace: 'B6', with: ['B1', 'B2', 'B3', 'B4', 'B5'] } },
+
+  // ---- Secret towers ----
+  "Obsidian":                      { ingredients: ['B5', 'Y5', 'D5'] },
+  "Agate":                         { ingredients: ['Q5', 'E5', 'G5'] },
+  "Fantastic Miss Shrimp":         { ingredients: ['R5', 'G5', 'B5'] },
+  "Yaphets Stone":                 { ingredients: ['B5', 'G5', 'B4', 'G4'] },
+  "Burning Stone":                 { ingredients: ['R5', 'P5', 'R4', 'P4'] }
+
+  // "The Great Stone" intentionally has no entry here - the source gives it
+  // no Combination line (see the `craftable: false` note on its COMBO_GEMS
+  // entry above).
+};
+
+// Kept as empty stubs so the existing (old-system) engine code in
+// index.html - which still imports COMBINATIONS/COMBO_UPGRADES and expects
+// the old "3 base gems -> 1 combo" shape - doesn't throw on import while
+// this is mid-migration. With COMBINATIONS empty, the old crafting UI will
+// simply never find a match, which is the expected/safe state until the
+// engine is rewired against RECIPES above.
+export const COMBINATIONS = [];
 export const COMBO_UPGRADES = {};
+
+// ---------------------------------------------------------------------------
+// What "engine wiring" still needs, for when that phase starts:
+//   1. A crafting flow that isn't tied to the 3-gem roll - something like a
+//      recipe browser (the existing "Combination recipes" panel is close)
+//      that checks the whole board for a satisfying set of ingredients
+//      (base-tier gems AND/OR existing combo towers) and lets the player
+//      trigger the craft, consuming those tiles.
+//   2. altSubstitute matching: treat a recipe as satisfied if either the
+//      exact tier-6 ingredient is on the board, OR all five of tiers 1-5
+//      of that letter are.
+//   3. Decide which NEW_ mechanics are worth building (chain/forked
+//      lightning and the on-hit splash-slow are probably the highest
+//      value; the tower-targeted auras like Resist/heal-the-castle likely
+//      aren't applicable to this engine at all and may be worth dropping
+//      rather than building).
