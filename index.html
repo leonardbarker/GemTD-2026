@@ -129,6 +129,7 @@
       <button id="deleteStoneBtn">Delete tower</button>
       <button id="toggleRecipes">Combination recipes</button>
       <button id="toggleLog">Combat log</button>
+      <div class="stat" id="speedControls" style="display:flex; gap:4px; align-items:center;">Speed:</div>
       <label class="stat" style="display:flex; gap:6px; align-items:center;">Difficulty
         <select id="difficulty"></select>
       </label>
@@ -201,6 +202,11 @@
       <div class="start-field">
         <label for="startDifficulty">Difficulty</label>
         <select id="startDifficulty"></select>
+      </div>
+
+      <div class="start-field">
+        <label for="startSpeed">Game speed</label>
+        <select id="startSpeed"></select>
       </div>
 
       <div class="start-field">
@@ -368,7 +374,11 @@
   const SPAWN_INTERVAL_MS = 450;
   const BASE_CREEP_SPEED = 95;
 
-  const GAME_SPEED = 2;
+  // Adjustable game speed - scales creep movement, spawn rate and tower
+  // cooldowns. Was a fixed 2x; 1x here is that same "normal" pace halved,
+  // per request. Changed live via the speed control buttons in the bar.
+  let gameSpeed = 1;
+  const GAME_SPEED_OPTIONS = [0.5, 1, 1.5, 2];
 
   const STARTING_LIVES = 20;
   let livesLeft = STARTING_LIVES;
@@ -1487,7 +1497,7 @@ function updateSpawning(now) {
 
   if (
     spawnedThisRound < creepsToSpawn &&
-    now - lastSpawnTime >= SPAWN_INTERVAL_MS / GAME_SPEED
+    now - lastSpawnTime >= SPAWN_INTERVAL_MS / gameSpeed
   ) {
     spawnOneCreep();
     lastSpawnTime = now;
@@ -1557,7 +1567,7 @@ function updateCreeps(dt, now) {
     // percentage slow, floored so it heavily hinders rather than fully
     // stops a creep even at the top Sapphire tier (-480).
     const baseSpeed = flatSlowed ? Math.max(50, c.speedMult - c.slowFlat) : c.speedMult;
-    const speed = stunned ? 0 : baseSpeed * GAME_SPEED *
+    const speed = stunned ? 0 : baseSpeed * gameSpeed *
       (slowed ? (1 - c.slowPct) : 1);
 
     let remaining = speed * (dt / 1000);
@@ -2053,7 +2063,7 @@ function updateTowers(now, dt = 16) {
       }
     }
 
-    const effectiveCooldown = stats.cooldown / (1 + auraBonus) / GAME_SPEED;
+    const effectiveCooldown = stats.cooldown / (1 + auraBonus) / gameSpeed;
 
     if (now - gem.lastAttack < effectiveCooldown) {
       continue;
@@ -3152,6 +3162,36 @@ difficultySelect.onchange = () => {
 };
 
 // ---------------------------------------------------------------------------
+// Game speed controls (adjustable any time, including mid-round - it's just
+// a playback-rate dial, not a maze/economy change)
+// ---------------------------------------------------------------------------
+
+const speedControlsEl = $('speedControls');
+const speedButtons = new Map();
+
+GAME_SPEED_OPTIONS.forEach(s => {
+  const btn = document.createElement('button');
+  btn.textContent = `${s}x`;
+  btn.style.cssText = 'padding:2px 8px; cursor:pointer;';
+  btn.addEventListener('click', () => setGameSpeed(s));
+  speedControlsEl.appendChild(btn);
+  speedButtons.set(s, btn);
+});
+
+function setGameSpeed(s) {
+  gameSpeed = s;
+
+  for (const [s2, btn] of speedButtons) {
+    btn.style.fontWeight = s2 === gameSpeed ? 'bold' : 'normal';
+    btn.style.outline = s2 === gameSpeed ? '2px solid #ffe66d' : 'none';
+  }
+
+  setMessage(`Game speed set to ${gameSpeed}x.`);
+}
+
+setGameSpeed(gameSpeed);
+
+// ---------------------------------------------------------------------------
 // Button Wiring
 // ---------------------------------------------------------------------------
 
@@ -3330,6 +3370,17 @@ DIFFICULTIES.forEach((d, i) => {
 
 startDifficultySelect.value = difficultyIndex;
 
+const startSpeedSelect = $('startSpeed');
+
+GAME_SPEED_OPTIONS.forEach(s => {
+  const opt = document.createElement('option');
+  opt.value = s;
+  opt.textContent = `${s}x`;
+  startSpeedSelect.appendChild(opt);
+});
+
+startSpeedSelect.value = gameSpeed;
+
 const startHpPctInput = $('startHpPct');
 const startHpPctLabel = $('startHpPctLabel');
 
@@ -3341,6 +3392,7 @@ $('startGameBtn').onclick = () => {
   difficultyIndex = Number(startDifficultySelect.value);
   hpPercentMultiplier = Number(startHpPctInput.value) / 100;
   mobileMode = $('startMobileMode').checked;
+  setGameSpeed(Number(startSpeedSelect.value));
 
   difficultySelect.value = difficultyIndex;
 
