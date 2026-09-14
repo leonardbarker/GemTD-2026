@@ -1257,7 +1257,6 @@ function getLifeCost() {
 
 function buyLife() {
   if (gameOver) return setMessage('Game over - start a new map to play again.');
-  if (roundActive) return setMessage('You cannot buy lives while a round is active.');
   if (pendingGemChoice) return setMessage('Finish your current gem choice before buying a life.');
 
   const cost = getLifeCost();
@@ -2947,7 +2946,7 @@ function updateStats() {
   const buyLifeBtn = $('buyLifeBtn');
   const lifeCost = getLifeCost();
   buyLifeBtn.textContent = `Buy life (${lifeCost}g)`;
-  buyLifeBtn.disabled = gameOver || roundActive || !!pendingGemChoice || gold < lifeCost;
+  buyLifeBtn.disabled = gameOver || !!pendingGemChoice || gold < lifeCost;
 
   $('randomGem').disabled =
     gameOver ||
