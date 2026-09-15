@@ -303,7 +303,12 @@
       const hexColor = def.colour || def.color || '#ff00ff';
       const tier = def.tiers ? def.tiers[gem.level || 0] : null;
       const baseStats = tier || def.stats || {};
-      const stats = applyDamageBuff(gem, baseStats);
+      // Combo raw numbers were ported from classic Gem TD where basic gems
+      // are much weaker. This prototype's base gems hit harder, so we scale
+      // combo combat stats up so combining is always a clear upgrade.
+      const scaled = scaleComboCombatStats(baseStats);
+      const stats = applyDamageBuff(gem, scaled);
+      const auraRadius = def.auraRadius || scaled.auraRadius || scaled.NEW_auraBurnRadius || 0;
       return {
         name: tier ? tier.name : gem.type,
         color: hexColor,
@@ -314,7 +319,7 @@
         stats,
         tier,
         tierCount: def.tiers ? def.tiers.length : 0,
-        auraRadius: def.auraRadius || 0
+        auraRadius
       };
     }
 
@@ -334,6 +339,65 @@
       stats: applyDamageBuff(gem, baseStats),
       auraRadius: def.auraRadius || 0
     };
+  }
+
+  // Classic Gem TD combo damage numbers assume much weaker basic gems than
+  // this prototype uses. Scale hit damage / poison so a combination of N
+  // gems is clearly stronger than leaving those N gems separate.
+  // Soft curve: early low-damage combos get a bigger relative boost; endgame
+  // nukes (already 1000+) are only nudged slightly so they stay strong
+  // without becoming absurd.
+  const COMBO_DMG_SCALE_LOW = 3.2;   // applied toward low-damage combos
+  const COMBO_DMG_SCALE_HIGH = 1.35; // applied toward high-damage combos
+  const COMBO_DMG_PIVOT = 200;       // dmg where the blend centers
+
+  function comboDamageMultiplier(avgDmg) {
+    if (!(avgDmg > 0)) return COMBO_DMG_SCALE_LOW;
+    // Smoothstep-ish blend from LOW -> HIGH as damage rises past the pivot
+    const t = Math.max(0, Math.min(1, avgDmg / (COMBO_DMG_PIVOT * 2)));
+    return COMBO_DMG_SCALE_LOW * (1 - t) + COMBO_DMG_SCALE_HIGH * t;
+  }
+
+  function scaleComboCombatStats(baseStats) {
+    if (!baseStats) return baseStats;
+    const out = { ...baseStats };
+
+    const avg = ((out.dmgMin || 0) + (out.dmgMax || 0)) / 2;
+    const mult = comboDamageMultiplier(avg);
+
+    if (out.dmgMin != null) {
+      // Pure support / burn-aura towers (0 listed damage) stay at 0 so they
+      // rely on their aura effect rather than a token auto-attack.
+      if (out.dmgMin > 0 || out.dmgMax > 0) {
+        out.dmgMin = Math.max(1, Math.round(out.dmgMin * mult));
+        out.dmgMax = Math.max(out.dmgMin, Math.round(out.dmgMax * mult));
+      }
+    }
+    if (out.poisonDps) {
+      out.poisonDps = Math.max(1, Math.round(out.poisonDps * mult));
+    }
+    // Flat slows in source data are large (90–480) relative to this engine's
+    // creep speed units (~BASE_CREEP_SPEED 95 scaled). Keep them, but ensure
+    // slow duration exists when slowFlat is set.
+    if (out.slowFlat && !out.slowDur) {
+      out.slowDur = 1200;
+    }
+    // Promote NEW_auraBurn fields into values the combat loop understands.
+    if (out.NEW_auraBurnDps && !out.auraBurnDps) {
+      out.auraBurnDps = Math.max(1, Math.round(out.NEW_auraBurnDps * mult));
+      out.auraBurnRadius = out.NEW_auraBurnRadius || out.auraRadius || 80;
+    }
+    // Simple chain: treat NEW_chainChance as extra multi-target chance via
+    // maxTargets bump when not already multi-target (lightweight stand-in
+    // until full chain lightning is implemented).
+    if (out.NEW_chainChance && !out.maxTargets) {
+      out.maxTargets = 1 + Math.max(1, Math.round((out.NEW_chainBounces || 3) * out.NEW_chainChance));
+    }
+    if (out.NEW_forkChance && !out.maxTargets) {
+      out.maxTargets = Math.max(2, out.NEW_forkTargets || 5);
+    }
+
+    return out;
   }
 
   // Black Opal's snapshot buff and Yellow Sapphire's continuous aura both
@@ -2292,8 +2356,8 @@ function updateTowers(now, dt = 16) {
   }
 
   // Reset then recompute continuous creep-targeting auras: armour reduction
-  // (Tourmaline) and area slow (Uranium). Both are presence-based, not
-  // stacking, so they're just recalculated fresh every frame.
+  // (Tourmaline) and area slow. Both are presence-based, not stacking, so
+  // they're just recalculated fresh every frame.
   for (const c of activeCreeps) {
     c.auraArmourReduction = 0;
   }
@@ -2303,10 +2367,11 @@ function updateTowers(now, dt = 16) {
     if (!stats.auraArmourReduction && !stats.auraSlowPct) continue;
 
     const pos = gemPositions.get(k);
+    const radius = stats.auraRadius || 0;
 
     for (const c of activeCreeps) {
       if (c.hp <= 0) continue;
-      if (Math.hypot(c.x - pos.x, c.y - pos.y) > stats.auraRadius) continue;
+      if (Math.hypot(c.x - pos.x, c.y - pos.y) > radius) continue;
       if (!canGemHitCreep(gem, c)) continue;
 
       if (stats.auraArmourReduction) {
@@ -2315,6 +2380,25 @@ function updateTowers(now, dt = 16) {
       if (stats.auraSlowPct) {
         applySlow(c, stats.auraSlowPct, 300, now);
       }
+    }
+  }
+
+  // Burn auras (Asteriated Ruby / Volcano / Burning Stone / etc.): continuous
+  // DPS in radius. These were stored as NEW_auraBurnDps and did nothing until
+  // scaleComboCombatStats promoted them to auraBurnDps.
+  for (const [k, gem] of gems) {
+    const { stats } = getGemStats(gem);
+    if (!stats.auraBurnDps) continue;
+
+    const pos = gemPositions.get(k);
+    const radius = stats.auraBurnRadius || stats.auraRadius || 80;
+    const tickDmg = stats.auraBurnDps * (dt / 1000) * gameSpeed;
+
+    for (const c of activeCreeps) {
+      if (c.hp <= 0) continue;
+      if (Math.hypot(c.x - pos.x, c.y - pos.y) > radius) continue;
+      if (!canGemHitCreep(gem, c)) continue;
+      applyDamage(c, tickDmg, stats.damageType || 'physical', { silent: true });
     }
   }
 
@@ -2332,6 +2416,12 @@ function updateTowers(now, dt = 16) {
       if (Math.hypot(o.pos.x - pos.x, o.pos.y - pos.y) <= o.radius) {
         auraBonus += o.pct;
       }
+    }
+
+    // Pure aura towers (0 attack damage, e.g. burn-only) skip the attack
+    // cycle - their effect is applied in the continuous-aura pass above.
+    if ((stats.dmgMax || 0) <= 0 && !stats.maxTargets) {
+      continue;
     }
 
     const effectiveCooldown = stats.cooldown / (1 + auraBonus) / gameSpeed;
@@ -2935,6 +3025,7 @@ function statLinesFromStats(s) {
   if (s.auraArmourReduction) parts.push(`-${s.auraArmourReduction} armour aura, radius ${s.auraRadius}`);
   if (s.auraSlowPct) parts.push(`${Math.round(s.auraSlowPct * 100)}% area slow, radius ${s.auraRadius}`);
   if (s.auraDamagePct) parts.push(`+${Math.round(s.auraDamagePct * 100)}% damage aura, radius ${s.auraRadius}`);
+  if (s.auraBurnDps) parts.push(`Burn aura ${s.auraBurnDps}/s, radius ${s.auraBurnRadius || s.auraRadius}`);
   if (s.snapshotBuffPct) parts.push(`On upgrade: +${Math.round(s.snapshotBuffPct * 100)}% damage to towers within ${s.snapshotBuffRadius} (one-time)`);
   if (s.goldOnHitChance) parts.push(`${Math.round(s.goldOnHitChance * 100)}% chance for bonus gold on hit`);
   if (s.goldBonusChance) parts.push(`${Math.round(s.goldBonusChance * 100)}% chance for +${s.goldBonusAmount || 100} gold`);
